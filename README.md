@@ -22,7 +22,17 @@ View your app in AI Studio: https://ai.studio/apps/17df0b3a-76d2-449b-b2ca-ce2b6
 ## Detalle de proyectos abiertos (T&M)
 
 Desde Dashboard, al entrar a un proyecto abierto se muestran entregables,
-actividades y etapas en paneles desplegables. Es posible agregarlos y editar sus
+actividades y etapas en dos pestañas:
+
+- **Tareas Activas** (inicial): paneles desplegables para crear y editar la estructura.
+  Conserva todas las actividades, incluidas las finalizadas y las no requeridas.
+- **Reporte Histórico**: la misma estructura actual, completamente desplegada y
+  solo lectura, sin controles de edición ni actualización de avance. Refleja el
+  borrador temporal, no versiones históricas almacenadas.
+
+Al alternar pestañas se conservan el borrador y la expansión de Tareas Activas.
+No se muestran las tarjetas globales de avance real ni tareas cerradas.
+Es posible agregar elementos y editar sus
 nombres y los pesos de etapas como una simulación visual: estos cambios viven
 solo en la pantalla y se descartan al salir, cambiar de proyecto o recargar.
 No se envían a la API ni modifican el cronograma de proyectos cerrados.

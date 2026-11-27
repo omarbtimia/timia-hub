@@ -48,8 +48,15 @@ const desplegar: React.CSSProperties = {
 const badge: React.CSSProperties = {
   padding: '4px 8px', borderRadius: 12, background: '#f1f5f9', color: '#64748b', fontSize: 11,
 };
+const texto: React.CSSProperties = { minWidth: 0, flex: '1 1 180px', overflowWrap: 'anywhere', fontSize: 12, color: '#334155' };
+const PESTANAS = [
+  { id: 'activas', nombre: 'Tareas Activas' },
+  { id: 'historico', nombre: 'Reporte Histórico' },
+] as const;
 
 export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance: (id: string) => void }) {
+  const [pestana, setPestana] = useState<typeof PESTANAS[number]['id']>('activas');
+  const soloLectura = pestana === 'historico';
   const [entregables, setEntregables] = useState(() => borradorDe(plan));
   const [abiertos, setAbiertos] = useState<Set<string>>(() => new Set(entregables.slice(0, 1).map(e => e.id)));
   const actividades = entregables.flatMap(e => e.actividades);
@@ -97,16 +104,42 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
 
   return (
     <section aria-label="Detalle del proyecto">
+      <div role="tablist" aria-label="Vistas del proyecto" style={{ display: 'flex', gap: 6, marginBottom: 18, borderBottom: '1px solid #e2e8f0', paddingBottom: 8 }}>
+        {PESTANAS.map((tab, i) => (
+          <button key={tab.id} type="button" role="tab" id={`tym-tab-${tab.id}`}
+            aria-controls={`tym-panel-${tab.id}`} aria-selected={pestana === tab.id} tabIndex={pestana === tab.id ? 0 : -1}
+            onClick={() => setPestana(tab.id)}
+            onKeyDown={ev => {
+              let siguiente: number;
+              if (ev.key === 'ArrowRight') siguiente = (i + 1) % PESTANAS.length;
+              else if (ev.key === 'ArrowLeft') siguiente = (i + PESTANAS.length - 1) % PESTANAS.length;
+              else if (ev.key === 'Home') siguiente = 0;
+              else if (ev.key === 'End') siguiente = PESTANAS.length - 1;
+              else return;
+              ev.preventDefault();
+              setPestana(PESTANAS[siguiente].id);
+              document.getElementById(`tym-tab-${PESTANAS[siguiente].id}`)?.focus();
+            }}
+            style={{ ...accion, borderColor: pestana === tab.id ? '#0d9488' : 'transparent', background: pestana === tab.id ? '#0d9488' : 'transparent', color: pestana === tab.id ? '#fff' : '#64748b' }}>
+            {tab.nombre}
+          </button>
+        ))}
+      </div>
+      {PESTANAS.filter(tab => tab.id !== pestana).map(tab => (
+        <div key={tab.id} role="tabpanel" id={`tym-panel-${tab.id}`} aria-labelledby={`tym-tab-${tab.id}`} hidden/>
+      ))}
+      <div role="tabpanel" id={`tym-panel-${pestana}`} aria-labelledby={`tym-tab-${pestana}`} tabIndex={0}>
       <div role="note" style={{
         display: 'flex', alignItems: 'flex-start', gap: 10, padding: '13px 16px', marginBottom: 18,
         border: '1px solid #fde68a', borderRadius: 10, background: '#fffbeb', color: '#92400e',
       }}>
         <Info size={17} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden="true"/>
         <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6 }}>
-          <strong>Simulación visual.</strong> Los entregables, nombres, actividades y etapas que edites aquí
+          <strong>Simulación visual.</strong> Los entregables, nombres, actividades y etapas que edites en Tareas Activas
           son temporales y se descartan al salir o recargar. No se envían al servidor.
-          {' '}<strong>Guardar avance</strong> de una tarea existente sí conserva sus cambios e historial.
+          {' '}<strong>Guardar avance</strong> de una tarea existente desde Tareas Activas sí conserva sus cambios e historial.
           Los pesos de etapas no modifican el avance real.
+          {soloLectura && ' Este reporte refleja la estructura temporal actual, no versiones históricas guardadas.'}
         </p>
       </div>
 
@@ -128,34 +161,34 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: 15, color: '#334155' }}>Detalle del proyecto</h2>
+          <h2 style={{ margin: 0, fontSize: 15, color: '#334155' }}>{soloLectura ? 'Reporte Histórico' : 'Detalle del proyecto'}</h2>
           <p style={{ margin: '4px 0 0', fontSize: 12, color: '#64748b' }}>Entregables, actividades y etapas de avance · sin cronograma</p>
         </div>
-        <button type="button" onClick={agregarEntregable} style={{ ...accion, background: '#0d9488', color: '#fff', borderColor: '#0d9488' }}>
+        {!soloLectura && <button type="button" onClick={agregarEntregable} style={{ ...accion, background: '#0d9488', color: '#fff', borderColor: '#0d9488' }}>
           <Plus size={14}/> Agregar entregable
-        </button>
+        </button>}
       </div>
 
       {!entregables.length && (
         <p style={{ padding: 32, textAlign: 'center', fontSize: 13, color: '#64748b', border: '1px dashed #cbd5e1', borderRadius: 10 }}>
-          Este proyecto todavía no tiene entregables. Agrega el primero para crear sus actividades y etapas.
+          {soloLectura ? 'Este proyecto todavía no tiene entregables para mostrar en el reporte.' : 'Este proyecto todavía no tiene entregables. Agrega el primero para crear sus actividades y etapas.'}
         </p>
       )}
       {entregables.map((ent, ei) => (
         <section key={ent.id} aria-label={`Entregable ${ei + 1}`} style={{ marginBottom: 14, border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden', background: '#fff' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '10px 14px', background: '#fff7f9' }}>
-            <button type="button" aria-label={`Desplegar entregable ${ei + 1}`} aria-expanded={abiertos.has(ent.id)} aria-controls={`contenido-${ent.id}`} onClick={() => alternar(ent.id)} style={{ ...desplegar, color: '#9f1239' }}>
+            {!soloLectura && <button type="button" aria-label={`Desplegar entregable ${ei + 1}`} aria-expanded={abiertos.has(ent.id)} aria-controls={`contenido-${ent.id}`} onClick={() => alternar(ent.id)} style={{ ...desplegar, color: '#9f1239' }}>
               {abiertos.has(ent.id) ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
-            </button>
-            <input aria-label={`Nombre del entregable ${ei + 1}`} value={ent.nombre} placeholder="Nombre del entregable"
+            </button>}
+            {soloLectura ? <h3 style={{ ...texto, margin: 0, color: '#9f1239' }}>{ent.nombre || 'Sin nombre'}</h3> : <input aria-label={`Nombre del entregable ${ei + 1}`} value={ent.nombre} placeholder="Nombre del entregable"
               onChange={ev => setEntregables(actual => actual.map(e => e.id === ent.id ? { ...e, nombre: ev.target.value } : e))}
-              style={{ ...campo, fontWeight: 600, color: '#9f1239' }}/>
+              style={{ ...campo, fontWeight: 600, color: '#9f1239' }}/>}
             <span style={badge}>{ent.actividades.length} {ent.actividades.length === 1 ? 'actividad' : 'actividades'}</span>
-            <button type="button" onClick={() => agregarActividad(ent.id)} style={accion}><Plus size={13}/> Agregar actividad</button>
+            {!soloLectura && <button type="button" onClick={() => agregarActividad(ent.id)} style={accion}><Plus size={13}/> Agregar actividad</button>}
           </div>
-          {abiertos.has(ent.id) && (
+          {(soloLectura || abiertos.has(ent.id)) && (
             <div id={`contenido-${ent.id}`} style={{ padding: 14, borderTop: '1px solid #f1f5f9' }}>
-              {!ent.actividades.length && <p style={{ margin: '8px 0', color: '#94a3b8', fontSize: 12 }}>Sin actividades. Agrega una actividad a este entregable.</p>}
+              {!ent.actividades.length && <p style={{ margin: '8px 0', color: '#94a3b8', fontSize: 12 }}>{soloLectura ? 'Sin actividades.' : 'Sin actividades. Agrega una actividad a este entregable.'}</p>}
               {ent.actividades.map((act, ai) => {
                 const tarea = plan.tareas.find(t => t.id === act.tareaId);
                 const estado = tarea ? estadoDe(tarea.estado) : null;
@@ -164,21 +197,21 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
                 return (
                   <section key={act.id} aria-label={`Actividad ${ei + 1}.${ai + 1}`} style={{ marginBottom: 8, border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
                     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '8px 10px' }}>
-                      <button type="button" aria-label={`Desplegar actividad ${ei + 1}.${ai + 1}`} aria-expanded={abiertos.has(act.id)} aria-controls={`contenido-${act.id}`} onClick={() => alternar(act.id)} style={{ ...desplegar, color: '#0d9488' }}>
+                      {!soloLectura && <button type="button" aria-label={`Desplegar actividad ${ei + 1}.${ai + 1}`} aria-expanded={abiertos.has(act.id)} aria-controls={`contenido-${act.id}`} onClick={() => alternar(act.id)} style={{ ...desplegar, color: '#0d9488' }}>
                         {abiertos.has(act.id) ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}
-                      </button>
-                      <input aria-label={`Nombre de la actividad ${ei + 1}.${ai + 1}`} value={act.nombre} placeholder="Nombre de la actividad"
-                        onChange={ev => cambiarActividad(ent.id, act.id, a => ({ ...a, nombre: ev.target.value }))} style={campo}/>
+                      </button>}
+                      {soloLectura ? <h4 style={{ ...texto, margin: 0 }}>{act.nombre || 'Sin nombre'}</h4> : <input aria-label={`Nombre de la actividad ${ei + 1}.${ai + 1}`} value={act.nombre} placeholder="Nombre de la actividad"
+                        onChange={ev => cambiarActividad(ent.id, act.id, a => ({ ...a, nombre: ev.target.value }))} style={campo}/>}
                       {tarea && estado ? (
                         <>
                           <span style={{ ...badge, background: estado.fondo, color: estado.texto }}>{estado.label}</span>
                           <span style={{ fontSize: 12, fontWeight: 700, color: '#334155' }}>{tarea.pct}%</span>
-                          <button type="button" style={accion} onClick={() => onAvance(tarea.id)} aria-label={`Actualizar avance de ${tarea.nombre}`}>Actualizar avance</button>
+                          {!soloLectura && <button type="button" style={accion} onClick={() => onAvance(tarea.id)} aria-label={`Actualizar avance de ${tarea.nombre}`}>Actualizar avance</button>}
                         </>
                       ) : <span style={{ ...badge, background: '#fffbeb', color: '#92400e' }}>Simulada · sin guardar</span>}
-                      <button type="button" onClick={() => agregarEtapa(ent.id, act.id)} style={accion}><Plus size={12}/> Agregar etapa</button>
+                      {!soloLectura && <button type="button" onClick={() => agregarEtapa(ent.id, act.id)} style={accion}><Plus size={12}/> Agregar etapa</button>}
                     </div>
-                    {abiertos.has(act.id) && (
+                    {(soloLectura || abiertos.has(act.id)) && (
                       <div id={`contenido-${act.id}`} style={{ padding: '12px 14px', borderTop: '1px solid #f1f5f9', background: '#fafcff' }}>
                         {tarea && <p style={{ margin: '0 0 10px', color: '#64748b', fontSize: 12 }}>Responsable: {tarea.responsable || 'Sin asignar'}</p>}
                         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 10 }}>
@@ -187,13 +220,13 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
                             {correcto ? 'Suma correcta: 100%' : `Las etapas suman ${total}%; deben sumar 100%`}
                           </span>}
                         </div>
-                        {!act.etapas.length && <p style={{ margin: 0, fontSize: 12, color: '#94a3b8' }}>Sin etapas. Agrega etapas para simular su distribución porcentual.</p>}
+                        {!act.etapas.length && <p style={{ margin: 0, fontSize: 12, color: '#94a3b8' }}>{soloLectura ? 'Sin etapas.' : 'Sin etapas. Agrega etapas para simular su distribución porcentual.'}</p>}
                         {act.etapas.map((et, eti) => (
                           <div key={et.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '7px 10px', marginBottom: 6, border: '1px solid #e2e8f0', borderRadius: 7, background: '#f8fafc' }}>
                             <span style={{ fontSize: 11, color: '#94a3b8' }}>{eti + 1}.</span>
-                            <input aria-label={`Nombre de la etapa ${ei + 1}.${ai + 1}.${eti + 1}`} value={et.nombre} placeholder="Nombre de la etapa" style={campo}
-                              onChange={ev => cambiarActividad(ent.id, act.id, a => ({ ...a, etapas: a.etapas.map(e => e.id === et.id ? { ...e, nombre: ev.target.value } : e) }))}/>
-                            <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11, color: '#64748b' }}>
+                            {soloLectura ? <span style={texto}>{et.nombre || 'Sin nombre'}</span> : <input aria-label={`Nombre de la etapa ${ei + 1}.${ai + 1}.${eti + 1}`} value={et.nombre} placeholder="Nombre de la etapa" style={campo}
+                              onChange={ev => cambiarActividad(ent.id, act.id, a => ({ ...a, etapas: a.etapas.map(e => e.id === et.id ? { ...e, nombre: ev.target.value } : e) }))}/>}
+                            {soloLectura ? <span style={{ fontSize: 12, color: '#64748b' }}>Peso: {et.peso}%</span> : <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11, color: '#64748b' }}>
                               Peso
                               <input aria-label={`Peso de la etapa ${ei + 1}.${ai + 1}.${eti + 1}`} type="number" min={0} max={100} step={1} value={et.peso}
                                 style={{ ...campo, flex: '0 0 auto', width: 65, textAlign: 'center', fontWeight: 600 }}
@@ -202,7 +235,7 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
                                   cambiarActividad(ent.id, act.id, a => ({ ...a, etapas: a.etapas.map(e => e.id === et.id ? { ...e, peso } : e) }));
                                 }}/>
                               %
-                            </label>
+                            </label>}
                           </div>
                         ))}
                       </div>
@@ -214,6 +247,7 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
           )}
         </section>
       ))}
+      </div>
     </section>
   );
 }
