@@ -7,6 +7,9 @@ import { adminStore } from '../../lib/adminStore';
 import { PasosTym, ChipTym } from './PasosTym';
 import { leerPlan, guardarPlan, nuevaTarea } from './almacen';
 import type { PlanTym, TareaTym } from './tipos';
+import { useAuth } from '../../contexts/AuthContext';
+import { canInProject, effectiveRole } from '../../lib/permissions';
+import { accesoTym, developersDelProyecto } from './responsables';
 
 const SIN_BLOQUE = 'General';
 
@@ -17,9 +20,12 @@ interface Props {
 }
 
 export default function CrearTareas({ projectId, onListo, onAtras }: Props) {
+  const { user, isLoading } = useAuth();
+  const autorizado = accesoTym(user, projectId) && effectiveRole(user, projectId) !== 'developer'
+    && canInProject(user, 'tasks.manage', projectId);
   const proyecto = useMemo(() => adminStore.getProjects().find(p => p.id === projectId), [projectId]);
   const equipo = useMemo(
-    () => adminStore.getUsers().filter(u => u.active && u.projectIds.includes(projectId)),
+    () => developersDelProyecto(projectId),
     [projectId],
   );
   const [plan, setPlan] = useState<PlanTym>(() => leerPlan(projectId));
@@ -27,6 +33,7 @@ export default function CrearTareas({ projectId, onListo, onAtras }: Props) {
   const [responsable, setResponsable] = useState('');
   const [bloque, setBloque] = useState(SIN_BLOQUE);
   const [bloqueNuevo, setBloqueNuevo] = useState('');
+  const [errorGuardado, setErrorGuardado] = useState('');
 
   const bloques = useMemo(() => {
     const vistos = new Set<string>([SIN_BLOQUE, ...plan.bloques, ...plan.tareas.map(t => t.bloque || SIN_BLOQUE)]);
@@ -43,25 +50,34 @@ export default function CrearTareas({ projectId, onListo, onAtras }: Props) {
   }, [plan]);
 
   function aplicar(siguiente: PlanTym) {
-    setPlan(siguiente);
-    guardarPlan(siguiente);
+    try {
+      guardarPlan(siguiente);
+      setPlan(siguiente);
+      setErrorGuardado('');
+      return true;
+    } catch (error) {
+      setErrorGuardado(error instanceof Error ? error.message : 'No se pudieron guardar las tareas.');
+      return false;
+    }
   }
 
   function agregar() {
+    if (!autorizado || (responsable && !equipo.some(u => u.name === responsable))) return;
     const texto = nombre.trim();
     if (!texto) return;
     const destino = (bloque === '__nuevo' ? bloqueNuevo.trim() : bloque) || SIN_BLOQUE;
     const t = nuevaTarea(texto, destino, responsable || undefined);
-    aplicar({
+    if (!aplicar({
       ...plan,
       bloques: plan.bloques.includes(destino) ? plan.bloques : [...plan.bloques, destino],
       tareas: [...plan.tareas, t],
-    });
+    })) return;
     setNombre('');
     if (bloque === '__nuevo') { setBloque(destino); setBloqueNuevo(''); }
   }
 
   function quitar(id: string) {
+    if (!autorizado) return;
     aplicar({ ...plan, tareas: plan.tareas.filter(t => t.id !== id) });
   }
 
@@ -72,6 +88,9 @@ export default function CrearTareas({ projectId, onListo, onAtras }: Props) {
   const etiqueta: React.CSSProperties = {
     display: 'block', fontSize: 12.5, fontWeight: 600, color: '#334155', marginBottom: 6,
   };
+
+  if (isLoading) return <p role="status">Cargando proyecto…</p>;
+  if (!autorizado) return <p role="alert">No tienes acceso a la gestión inicial de tareas de este proyecto. Crea tus elementos desde la vista del proyecto abierto.</p>;
 
   return (
     <div style={{ minHeight: '100%', background: '#f8fafc', padding: '40px 24px 56px' }}>
@@ -85,6 +104,7 @@ export default function CrearTareas({ projectId, onListo, onAtras }: Props) {
         <p style={{ margin: '0 0 28px', fontSize: 15, color: '#64748b', maxWidth: '72ch' }}>
           {proyecto?.name ?? projectId}. Agrega las tareas con las que arranca el equipo; después se pueden crear más desde el proyecto.
         </p>
+        {errorGuardado && <p role="alert" style={{ color: '#b91c1c' }}>No se guardaron los cambios: {errorGuardado}</p>}
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 22, alignItems: 'flex-start' }}>
 

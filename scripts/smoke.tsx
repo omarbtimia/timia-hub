@@ -15,6 +15,15 @@ w.confirm = () => true;
 w.prompt = () => null;
 const db = JSON.parse(fs.readFileSync('public/db.json','utf8'));
 for (const [k,v] of Object.entries(db)) if (k.startsWith('timia_')) w.localStorage.setItem(k, JSON.stringify(v));
+w.localStorage.setItem('timia_admin_projects', JSON.stringify([
+  ...JSON.parse(w.localStorage.getItem('timia_admin_projects') ?? '[]'),
+  { id: 'TYM-DEMO', name: 'Proyecto abierto demo', client: 'Demo', active: true, tipo: 'tym' },
+]));
+w.localStorage.setItem('timia_admin_users', JSON.stringify([
+  ...JSON.parse(w.localStorage.getItem('timia_admin_users') ?? '[]'),
+  { id: 'tym-dev', name: 'Developer T&M', email: 'tym@example.test', role: 'developer',
+    projectIds: ['TYM-DEMO'], active: true, initials: 'TD', avatarColor: '#0d9488' },
+]));
 // Restos de versiones anteriores que pueden quedar en el navegador
 w.localStorage.setItem('timia_notes_MIGBD', JSON.stringify({ pasos:['x'] }));
 w.localStorage.setItem('timia_notes_OTRO', 'garbage{');
@@ -23,7 +32,7 @@ w.localStorage.setItem('timia_notes_OTRO', 'garbage{');
 w.localStorage.setItem('timia_tym_planes', JSON.stringify({ 'TYM-DEMO': {
   projectId: 'TYM-DEMO', bloques: ['Incidencias'],
   tareas: [
-    { id: 't1', nombre: 'Atención de incidencias', bloque: 'Incidencias', responsable: 'Juliana Garzón', estado: 'en-curso', pct: 60, creada: '2026-11-01T12:00:00Z' },
+    { id: 't1', nombre: 'Atención de incidencias', bloque: 'Incidencias', responsable: 'Developer T&M', estado: 'en-curso', pct: 60, creada: '2026-11-01T12:00:00Z' },
     { id: 't2', nombre: 'Ajustes de validación', bloque: 'Incidencias', estado: 'finalizada', pct: 100, creada: '2026-11-02T12:00:00Z' },
   ],
   historial: { t1: [{ fecha: '2026-11-20T12:00:00Z', de: 40, a: 60, quien: 'Amilkar', nota: 'reglas validadas' }] },
@@ -99,6 +108,7 @@ let failed = false;
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   console.error = (...a:any[]) => { const s = a.join(' '); if (!s.includes('act(')) errors.push('console.error: ' + s.slice(0,300)); };
   for (const acc of auth.MOCK_ACCOUNTS) {
+    if (!acc.projectIds.includes('TYM-DEMO')) acc.projectIds.push('TYM-DEMO');
     w.localStorage.setItem('timia_hub_user', JSON.stringify(acc));
     for (const [name, C, props] of [['Plan', PlanDeTrabajo, {}], ['Estim', Estimaciones, { onViewChange:()=>{}, onBack:()=>{} }], ['Tareas', Bitacora, {}], ['TR', ActivityReport, { user: acc }], ['Dash', PMDashboard, { onViewChange: () => {} }], ['TymProy', ProyectoTym, { projectId: 'TYM-DEMO' }], ['TymTareas', CrearTareas, { projectId: 'TYM-DEMO', onListo: () => {} }]] as any) {
       const el = w.document.createElement('div'); w.document.body.appendChild(el);
@@ -113,6 +123,11 @@ let failed = false;
         for (const p of ['FICO','CRONOS','NGA','FICO','General','Ver cronogramas en el tiempo','Input','FICO 2.0','Randómico','Principal','+ Bloqueante','+ Seleccionar tareas','Confirmar','+ Alerta','+ Seleccionar tareas','Cancelar','+ Cronograma','Nuevo cambio','Cargar TR','Features y horas','Nueva feature','Cumplimiento','Validación','Generar standup','Correos','Links importantes','Horas del anexo']) await click(p);
         const row = el.querySelector('tbody tr'); if (row) await act(async () => { row.dispatchEvent(new w.MouseEvent('click', { bubbles: true })); });
         if (name === 'TymProy') {
+          const filtro = el.querySelector('select[aria-label="Visualizar trabajo de"]') as HTMLSelectElement | null;
+          if (filtro) await act(async () => {
+            filtro.value = 'tym-dev';
+            filtro.dispatchEvent(new w.Event('change', { bubbles: true }));
+          });
           await click('Actualizar avance');
           if (!el.querySelector('[role="dialog"]')) errors.push('falta panel de avance en TymProy');
         }

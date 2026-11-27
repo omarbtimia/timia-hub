@@ -7,24 +7,32 @@ import { Info } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { adminStore } from '../../lib/adminStore';
 import { ChipTym } from './PasosTym';
-import { leerPlan, guardarPlan, conAvance } from './almacen';
-import PanelAvance from './PanelAvance';
+import { leerPlan, guardarPlan } from './almacen';
 import DetalleTym from './DetalleTym';
 import type { PlanTym } from './tipos';
+import { effectiveRole } from '../../lib/permissions';
+import { accesoTym, developersDelProyecto } from './responsables';
 
 export default function ProyectoTym({ projectId }: { projectId: string }) {
-  return <React.Fragment key={projectId}><ProyectoTymContenido projectId={projectId}/></React.Fragment>;
+  const { user, isLoading } = useAuth();
+  if (isLoading) return <p role="status">Cargando proyecto…</p>;
+  if (!accesoTym(user, projectId)) return <p role="alert">No tienes acceso a este proyecto abierto.</p>;
+  return <React.Fragment key={`${projectId}:${user?.id}`}><ProyectoTymContenido projectId={projectId}/></React.Fragment>;
 }
 
 function ProyectoTymContenido({ projectId }: { projectId: string }) {
   const { user } = useAuth();
   const proyecto = useMemo(() => adminStore.getProjects().find(p => p.id === projectId), [projectId]);
   const [plan, setPlan] = useState<PlanTym>(() => leerPlan(projectId));
-  const [abierta, setAbierta] = useState<string | null>(null);
+  const personal = effectiveRole(user, projectId) === 'developer';
+  const equipo = developersDelProyecto(projectId);
+  const [seleccion, setSeleccion] = useState('');
+  const personaId = personal ? user!.id : equipo.some(u => u.id === seleccion) ? seleccion : null;
+  const [bloqueado, setBloqueado] = useState(false);
 
   function aplicar(siguiente: PlanTym) {
-    setPlan(siguiente);
     guardarPlan(siguiente);
+    setPlan(siguiente);
   }
 
   return (
@@ -36,7 +44,7 @@ function ProyectoTymContenido({ projectId }: { projectId: string }) {
           <ChipTym/>
         </div>
         <p style={{ margin: '0 0 24px', fontSize: 14, color: '#64748b' }}>
-          {proyecto?.client ?? '—'} · {plan.tareas.length} {plan.tareas.length === 1 ? 'tarea' : 'tareas'}
+          {proyecto?.client ?? '—'}
         </p>
 
         <div style={{ padding: '14px 18px', borderRadius: 12, marginBottom: 22, border: '1px dashed #cbd5e1', display: 'flex', gap: 11, alignItems: 'flex-start' }}>
@@ -46,23 +54,22 @@ function ProyectoTymContenido({ projectId }: { projectId: string }) {
           </p>
         </div>
 
-        <DetalleTym plan={plan} onAvance={setAbierta}/>
+        {!personal ? <label style={{ display: 'block', marginBottom: 20, fontSize: 13, color: '#334155' }}>
+          Visualizar trabajo de
+          <select aria-label="Visualizar trabajo de" value={personaId ?? ''} disabled={bloqueado}
+            onChange={ev => {
+              if (!bloqueado && (!ev.target.value || equipo.some(u => u.id === ev.target.value))) setSeleccion(ev.target.value);
+            }}
+            style={{ display: 'block', width: '100%', maxWidth: 400, minHeight: 44, marginTop: 6, padding: 10, border: '1px solid #cbd5e1', borderRadius: 8 }}>
+            <option value="">Panorama General</option>
+            {equipo.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </select>
+        </label> : <p style={{ fontSize: 14, fontWeight: 600 }}>Mi trabajo · {user?.name}</p>}
+        {!equipo.length && <p role="status">No hay developers activos asociados a este proyecto. Asócialos desde Gestionar equipo.</p>}
+        <DetalleTym plan={plan} onGuardarPlan={aplicar} equipo={equipo} personaId={personaId}
+          personal={personal} usuario={user!} onPendiente={setBloqueado}/>
       </div>
 
-      {abierta && (() => {
-        const t = plan.tareas.find(x => x.id === abierta);
-        if (!t) return null;
-        return (
-          <PanelAvance
-            plan={plan} tarea={t}
-            onCerrar={() => setAbierta(null)}
-            onGuardar={(cambios, nota) => {
-              aplicar(conAvance(plan, t.id, cambios, user?.name ?? 'Alguien', nota));
-              setAbierta(null);
-            }}
-          />
-        );
-      })()}
     </div>
   );
 }

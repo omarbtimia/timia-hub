@@ -8,15 +8,15 @@
 
 import { persistSet } from '../../lib/persist';
 import { adminStore, type AdminProject } from '../../lib/adminStore';
-import { planVacio, type PlanTym, type TareaTym, type CambioTym } from './tipos';
-import { esEstructuraLocal, estructuraValida, leerConfiguraciones, PLAN_CONFIGS_KEY, type PlanStructure, type PlanEntregableStructure } from '../../lib/planStructure';
+import { planVacio, type PlanTym, type TareaTym, type CambioTym, type EstructuraTym, type EntregableTym } from './tipos';
+import { esEstructuraLocal, estructuraValida, leerConfiguraciones, PLAN_CONFIGS_KEY } from '../../lib/planStructure';
 
-export function leerEstructura(plan: PlanTym): PlanStructure {
+export function leerEstructura(plan: PlanTym): EstructuraTym {
   const cfg = leerConfiguraciones()[plan.projectId];
   if (cfg !== undefined && (!esEstructuraLocal(cfg) || !estructuraValida(cfg) || cfg.projectId !== plan.projectId)) {
     throw new Error('La estructura guardada de este proyecto no es válida. No se sobrescribieron sus datos.');
   }
-  const estructura: PlanStructure = estructuraValida(cfg)
+  const estructura: EstructuraTym = estructuraValida(cfg)
     ? structuredClone(cfg)
     : { projectId: plan.projectId, entregables: [] };
   const ids = new Set(estructura.entregables.flatMap(e => e.activities.map(a => a.id)));
@@ -35,8 +35,8 @@ export function leerEstructura(plan: PlanTym): PlanStructure {
   return estructura;
 }
 
-export function guardarEstructura(projectId: string, entregables: PlanEntregableStructure[]): void {
-  const estructura: PlanStructure = { projectId, entregables };
+export function guardarEstructura(projectId: string, entregables: EntregableTym[]): void {
+  const estructura: EstructuraTym = { projectId, entregables };
   if (!estructuraValida(estructura)) throw new Error('La estructura contiene identificadores o pesos de etapas no válidos.');
   const all = leerConfiguraciones();
   const anterior = all[projectId];
@@ -65,7 +65,13 @@ export function leerPlan(projectId: string): PlanTym {
 }
 
 export function guardarPlan(plan: PlanTym): void {
-  persistSet(CLAVE, { ...todos(), [plan.projectId]: plan });
+  const raw = localStorage.getItem(CLAVE);
+  const all: unknown = raw === null ? {} : JSON.parse(raw);
+  if (!all || typeof all !== 'object' || Array.isArray(all)) throw new Error('El seguimiento guardado no es válido.');
+  const siguiente = { ...all, [plan.projectId]: plan };
+  // persistSet oculta errores de cuota en otras claves; aqui deben poder reintentarse.
+  localStorage.setItem(CLAVE, JSON.stringify(siguiente));
+  persistSet(CLAVE, siguiente);
 }
 
 /** ¿Este proyecto es abierto? Sin `tipo`, es cerrado: así estaban todos. */

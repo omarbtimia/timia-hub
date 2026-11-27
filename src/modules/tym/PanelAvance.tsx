@@ -3,7 +3,8 @@
 // se puede ver por qué una tarea pasó de 40 a 60.
 import React, { useMemo, useState } from 'react';
 import { X } from 'lucide-react';
-import { adminStore } from '../../lib/adminStore';
+import type { AdminUser } from '../../lib/adminStore';
+import { developersDelProyecto } from './responsables';
 import { ESTADOS, type EstadoTarea, type PlanTym, type TareaTym } from './tipos';
 
 const ATAJOS = [0, 25, 50, 75, 100];
@@ -11,20 +12,22 @@ const ATAJOS = [0, 25, 50, 75, 100];
 interface Props {
   plan: PlanTym;
   tarea: TareaTym;
-  onGuardar: (cambios: { pct: number; estado: EstadoTarea; responsable?: string }, nota: string) => void;
+  equipoPermitido?: AdminUser[];
+  responsableId?: string;
+  onGuardar: (cambios: { pct: number; estado: EstadoTarea; responsable?: string; responsableId?: string }, nota: string) => void;
   onCerrar: () => void;
 }
 
-export default function PanelAvance({ plan, tarea, onGuardar, onCerrar }: Props) {
+export default function PanelAvance({ plan, tarea, onGuardar, onCerrar, equipoPermitido, responsableId }: Props) {
   const [pct, setPct] = useState(tarea.pct);
   const [estado, setEstado] = useState<EstadoTarea>(tarea.estado);
-  const [responsable, setResponsable] = useState(tarea.responsable ?? '');
   const [nota, setNota] = useState('');
 
   const equipo = useMemo(
-    () => adminStore.getUsers().filter(u => u.active && u.projectIds.includes(plan.projectId)),
-    [plan.projectId],
+    () => equipoPermitido ?? developersDelProyecto(plan.projectId),
+    [plan.projectId, equipoPermitido],
   );
+  const [seleccion, setSeleccion] = useState(responsableId ?? '');
   const historial = plan.historial[tarea.id] ?? [];
 
   const campo: React.CSSProperties = {
@@ -89,10 +92,9 @@ export default function PanelAvance({ plan, tarea, onGuardar, onCerrar }: Props)
                 </div>
                 <div style={{ flex: '1 1 200px', minWidth: 0 }}>
                   <label htmlFor="tym-resp2" style={etiqueta}>Responsable</label>
-                  <select id="tym-resp2" value={responsable} onChange={e => setResponsable(e.target.value)} style={campo}>
-                    <option value="">Sin asignar</option>
-                    {equipo.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
-                    {responsable && !equipo.some(u => u.name === responsable) && <option value={responsable}>{responsable}</option>}
+                  <select id="tym-resp2" value={seleccion} onChange={e => { if (equipo.some(u => u.id === e.target.value)) setSeleccion(e.target.value); }} style={campo}>
+                    {!equipo.some(u => u.id === seleccion) && <option value="">Selecciona un developer</option>}
+                    {equipo.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                   </select>
                 </div>
               </div>
@@ -109,7 +111,10 @@ export default function PanelAvance({ plan, tarea, onGuardar, onCerrar }: Props)
                 <button onClick={onCerrar} style={{ minHeight: 44, padding: '0 18px', borderRadius: 9, border: '1px solid #cbd5e1', background: '#fff', color: '#334155', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
                   Cancelar
                 </button>
-                <button onClick={() => onGuardar({ pct, estado, responsable: responsable || undefined }, nota)} style={{
+                <button disabled={!equipo.some(u => u.id === seleccion)} onClick={() => {
+                  const responsable = equipo.find(u => u.id === seleccion);
+                  if (responsable) onGuardar({ pct, estado, responsable: responsable.name, responsableId: responsable.id }, nota);
+                }} style={{
                   minHeight: 44, padding: '0 22px', borderRadius: 9, border: 0, background: '#dc2626', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer',
                 }}>
                   Guardar avance

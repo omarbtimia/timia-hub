@@ -7,6 +7,16 @@
 // de entregables, actividades y etapas comparte contrato y clave con ellos,
 // pero se guarda localmente y no incorpora semanas ni fechas de planificación.
 
+import type { PlanActivityStructure, PlanEntregableStructure, PlanEtapa } from '../../lib/planStructure';
+
+export interface EtapaTym extends PlanEtapa { responsableId?: string }
+export interface ActividadTym extends PlanActivityStructure {
+  responsableId?: string;
+  etapas?: EtapaTym[];
+}
+export interface EntregableTym extends PlanEntregableStructure<ActividadTym> { responsableId?: string }
+export interface EstructuraTym { projectId: string; entregables: EntregableTym[] }
+
 export type EstadoTarea = 'en-curso' | 'en-espera' | 'finalizada' | 'no-se-requiere';
 
 export const ESTADOS: { id: EstadoTarea; label: string; fondo: string; texto: string; borde: string }[] = [

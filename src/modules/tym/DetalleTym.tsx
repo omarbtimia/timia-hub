@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CheckSquare, ChevronDown, ChevronRight, Info, LayoutList, Plus, Settings2 } from 'lucide-react';
-import { guardarEstructura, leerEstructura, nuevoId } from './almacen';
-import { estadoDe, type PlanTym } from './tipos';
-import type { PlanActivityStructure, PlanEntregableStructure } from '../../lib/planStructure';
+import { guardarEstructura, leerEstructura, nuevoId, nuevaTarea, conAvance } from './almacen';
+import { estadoDe, type PlanTym, type EntregableTym, type ActividadTym, type EstadoTarea } from './tipos';
+import type { AdminUser } from '../../lib/adminStore';
+import { estructuraConResponsables, filtrarEntregables, type UsuarioTym } from './responsables';
+import PanelAvance from './PanelAvance';
 
 const mensajeError = (error: unknown) => error instanceof Error ? error.message : 'No se pudo acceder al almacenamiento de este navegador.';
 
@@ -21,6 +23,7 @@ const desplegar: React.CSSProperties = {
 };
 const badge: React.CSSProperties = {
   padding: '4px 8px', borderRadius: 12, background: '#f1f5f9', color: '#64748b', fontSize: 11,
+  minWidth: 0, maxWidth: '100%', overflowWrap: 'anywhere',
 };
 const texto: React.CSSProperties = { minWidth: 0, flex: '1 1 180px', overflowWrap: 'anywhere', fontSize: 12, color: '#334155' };
 const PESTANAS = [
@@ -28,29 +31,74 @@ const PESTANAS = [
   { id: 'historico', nombre: 'Reporte Histórico' },
 ] as const;
 
-export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance: (id: string) => void }) {
+interface Props {
+  plan: PlanTym;
+  onGuardarPlan: (plan: PlanTym) => void;
+  equipo: AdminUser[];
+  personaId: string | null;
+  personal: boolean;
+  usuario: UsuarioTym;
+  onPendiente: (pendiente: boolean) => void;
+}
+
+export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, personal, usuario, onPendiente }: Props) {
   const [pestana, setPestana] = useState<typeof PESTANAS[number]['id']>('activas');
   const soloLectura = pestana === 'historico';
-  const [inicial] = useState<{ entregables: PlanEntregableStructure[]; error: string }>(() => {
-    try { return { entregables: leerEstructura(plan).entregables, error: '' }; }
+  const panorama = personaId === null;
+  const [inicial] = useState<{ entregables: EntregableTym[]; error: string }>(() => {
+    try { return { entregables: estructuraConResponsables(leerEstructura(plan).entregables, plan, equipo), error: '' }; }
     catch (error) { return { entregables: [], error: mensajeError(error) }; }
   });
   const [entregables, setEntregables] = useState(inicial.entregables);
   const [errorGuardado, setErrorGuardado] = useState(inicial.error);
   const [guardado, setGuardado] = useState(false);
+  const [pendiente, setPendiente] = useState<PlanTym | null>(null);
+  const [abierta, setAbierta] = useState<string | null>(null);
+  const planActual = pendiente ?? plan;
+  useEffect(() => { onPendiente(!!errorGuardado && !inicial.error); }, [errorGuardado, inicial.error, onPendiente]);
+  useEffect(() => { setAbierta(null); }, [personaId, pestana]);
   const [abiertos, setAbiertos] = useState<Set<string>>(() => new Set(entregables.slice(0, 1).map(e => e.id)));
-  const actividades = entregables.flatMap(e => e.activities);
+  const visibles = filtrarEntregables(entregables, personaId);
+  const actividades = visibles.flatMap(e => e.activities);
   const etapas = actividades.flatMap(a => a.etapas ?? []);
+  const persona = equipo.find(u => u.id === personaId);
+  const editable = (nodo: { responsableId?: string }) =>
+    !soloLectura && !inicial.error && !!persona && nodo.responsableId === personaId;
+  const puedeCrear = !soloLectura && !inicial.error && !!persona;
+  const sinAsignar = (nodo: { responsableId?: string }) => !equipo.some(u => u.id === nodo.responsableId);
+  const puedeAsignar = (nodo: { responsableId?: string }) =>
+    !soloLectura && !inicial.error && (editable(nodo) || (!personal && panorama && sinAsignar(nodo)));
 
-  function aplicar(siguiente: PlanEntregableStructure[]) {
+  function aplicar(siguiente: EntregableTym[], seguimiento = planActual): boolean {
+    if (inicial.error) return false;
+    const tareas = seguimiento.tareas.map(t => {
+      const ent = siguiente.find(e => e.activities.some(a => a.id === t.id));
+      const act = ent?.activities.find(a => a.id === t.id);
+      if (!ent || !act) return t;
+      const anterior = entregables.flatMap(e => e.activities).find(a => a.id === t.id);
+      const entAnterior = entregables.find(e => e.activities.some(a => a.id === t.id));
+      const asignado = equipo.find(u => u.id === act.responsableId);
+      return {
+        ...t,
+        ...(act.label !== anterior?.label ? { nombre: act.label } : {}),
+        ...(ent.label !== entAnterior?.label ? { bloque: ent.label } : {}),
+        ...(act.responsableId !== anterior?.responsableId && asignado ? { responsable: asignado.name } : {}),
+      };
+    });
+    const nuevoPlan = { ...seguimiento, tareas };
     setEntregables(siguiente);
+    setPendiente(nuevoPlan);
     try {
       guardarEstructura(plan.projectId, siguiente);
+      if (JSON.stringify(nuevoPlan) !== JSON.stringify(plan)) onGuardarPlan(nuevoPlan);
+      setPendiente(null);
       setErrorGuardado('');
       setGuardado(true);
+      return true;
     } catch (error) {
       setErrorGuardado(mensajeError(error));
       setGuardado(false);
+      return false;
     }
   }
 
@@ -66,33 +114,81 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
     });
   }
 
-  function cambiarActividad(entId: string, actId: string, transformar: (a: PlanActivityStructure) => PlanActivityStructure) {
+  function cambiarActividad(entId: string, actId: string, transformar: (a: ActividadTym) => ActividadTym) {
     aplicar(entregables.map(e => e.id !== entId ? e : {
       ...e, activities: e.activities.map(a => a.id === actId ? transformar(a) : a),
     }));
   }
 
   function agregarEntregable() {
-    const nuevo: PlanEntregableStructure = { id: nuevoId(), label: 'Nuevo entregable', activities: [] };
+    if (!puedeCrear) return;
+    const nuevo: EntregableTym = { id: nuevoId(), label: 'Nuevo entregable', responsableId: personaId!, activities: [] };
     aplicar([...entregables, nuevo]);
     abrir(nuevo.id);
   }
 
   function agregarActividad(entId: string) {
+    if (!puedeCrear || !visibles.some(e => e.id === entId)) return;
     const id = nuevoId();
-    const nueva: PlanActivityStructure = { id, label: 'Nueva actividad', etapas: [] };
-    aplicar(entregables.map(e => e.id === entId ? { ...e, activities: [...e.activities, nueva] } : e));
+    const nueva: ActividadTym = { id, label: 'Nueva actividad', responsableId: personaId!, etapas: [] };
+    const ent = entregables.find(e => e.id === entId)!;
+    const tarea = { ...nuevaTarea(nueva.label, ent.label, persona!.name), id };
+    aplicar(entregables.map(e => e.id === entId ? { ...e, activities: [...e.activities, nueva] } : e),
+      { ...planActual, tareas: [...planActual.tareas, tarea] });
     setAbiertos(actual => new Set([...actual, entId, id]));
   }
 
   function agregarEtapa(entId: string, actId: string) {
+    if (!puedeCrear || !visibles.some(e => e.id === entId && e.activities.some(a => a.id === actId))) return;
     const id = nuevoId();
     cambiarActividad(entId, actId, a => ({
       ...a, etapas: [...(a.etapas ?? []), {
-        id, label: 'Nueva etapa', peso: Math.max(0, 100 - (a.etapas ?? []).reduce((s, et) => s + et.peso, 0)),
+        id, label: 'Nueva etapa', responsableId: personaId!, peso: Math.max(0, 100 - (a.etapas ?? []).reduce((s, et) => s + et.peso, 0)),
       }],
     }));
     abrir(actId);
+  }
+
+  function responsable(nodo: { responsableId?: string }, label: string, asignar: (id: string) => void) {
+    const nombre = equipo.find(u => u.id === nodo.responsableId)?.name;
+    if (!puedeAsignar(nodo)) return <span style={badge}>Responsable: {nombre ?? 'Sin asignar'}</span>;
+    const opciones = personal ? equipo.filter(u => u.id === usuario.id) : equipo;
+    return <label style={{ fontSize: 11, color: '#64748b', minWidth: 0, maxWidth: '100%', flex: '0 1 220px', display: 'flex', flexWrap: 'wrap', gap: 4 }}>Responsable{' '}
+      <select aria-label={`Responsable ${label}`} value={nombre ? nodo.responsableId : ''}
+        onChange={ev => {
+          if (puedeAsignar(nodo) && opciones.some(u => u.id === ev.target.value)) asignar(ev.target.value);
+        }} style={{ ...campo, width: '100%', maxWidth: '100%', boxSizing: 'border-box', minHeight: 36 }}>
+        {!nombre && <option value="">Sin asignar</option>}
+        {opciones.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+      </select>
+    </label>;
+  }
+
+  function tareaPara(act: ActividadTym, ent: EntregableTym) {
+    return planActual.tareas.find(t => t.id === act.id)
+      ?? { ...nuevaTarea(act.label, ent.label, equipo.find(u => u.id === act.responsableId)?.name), id: act.id! };
+  }
+
+  const entAbierto = entregables.find(e => e.activities.some(a => a.id === abierta));
+  const actAbierta = entAbierto?.activities.find(a => a.id === abierta);
+  const tareaAbierta = entAbierto && actAbierta && editable(actAbierta) ? tareaPara(actAbierta, entAbierto) : null;
+
+  function guardarAvance(cambios: { pct: number; estado: EstadoTarea; responsable?: string; responsableId?: string }, nota: string) {
+    if (!actAbierta || !entAbierto || !tareaAbierta || !editable(actAbierta)) return;
+    const candidatos = equipo.filter(u => u.id === cambios.responsableId && (!personal || u.id === usuario.id));
+    if (candidatos.length !== 1) {
+      setErrorGuardado('Selecciona un developer válido del proyecto.');
+      return;
+    }
+    const id = candidatos[0].id;
+    const base = planActual.tareas.some(t => t.id === tareaAbierta.id) ? planActual
+      : { ...planActual, tareas: [...planActual.tareas, tareaAbierta] };
+    const siguiente = entregables.map(e => ({ ...e, activities: e.activities.map(a =>
+      a.id === actAbierta.id ? { ...a, responsableId: id } : a) }));
+    aplicar(siguiente, conAvance(base, tareaAbierta.id, {
+      pct: cambios.pct, estado: cambios.estado, responsable: candidatos[0].name,
+    }, usuario.name, nota));
+    setAbierta(null);
   }
 
   return (
@@ -132,6 +228,7 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
           en este navegador. La integración con el backend está pendiente; no se comparten entre dispositivos.
           {' '}<strong>Guardar avance</strong> de una tarea existente desde Tareas Activas sí conserva sus cambios e historial.
           Los pesos de etapas no modifican el avance real.
+          {panorama && ' Panorama General es de consulta; solo puedes asignar los elementos que figuran Sin asignar.'}
           {soloLectura && ' Este reporte refleja la estructura actual, no versiones históricas guardadas.'}
         </p>
       </div>
@@ -143,7 +240,7 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8, marginBottom: 18 }}>
         {[
-          { nombre: 'Entregables', cantidad: entregables.length, icono: <CheckSquare size={17}/>, fondo: '#f5f3ff', color: '#7c3aed' },
+          { nombre: 'Entregables', cantidad: visibles.length, icono: <CheckSquare size={17}/>, fondo: '#f5f3ff', color: '#7c3aed' },
           { nombre: 'Actividades', cantidad: actividades.length, icono: <LayoutList size={17}/>, fondo: '#eff6ff', color: '#0369a1' },
           { nombre: 'Etapas', cantidad: etapas.length, icono: <Settings2 size={17}/>, fondo: '#f0fdfa', color: '#0d9488' },
         ].map(s => (
@@ -151,7 +248,7 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
             {s.icono}
             <div>
               <strong style={{ display: 'block', fontSize: 22 }}>{s.cantidad}</strong>
-              <span style={{ fontSize: 11 }}>{s.nombre} · estructura local</span>
+              <span style={{ fontSize: 11 }}>{s.nombre} · visibles{!panorama ? ' (incluye contexto)' : ''}</span>
             </div>
           </div>
         ))}
@@ -162,36 +259,40 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
           <h2 style={{ margin: 0, fontSize: 15, color: '#334155' }}>{soloLectura ? 'Reporte Histórico' : 'Detalle del proyecto'}</h2>
           <p style={{ margin: '4px 0 0', fontSize: 12, color: '#64748b' }}>Entregables, actividades y etapas de avance · sin cronograma</p>
         </div>
-        {!soloLectura && !inicial.error && <button type="button" onClick={agregarEntregable} style={{ ...accion, background: '#0d9488', color: '#fff', borderColor: '#0d9488' }}>
+        {puedeCrear && <button type="button" onClick={agregarEntregable} style={{ ...accion, background: '#0d9488', color: '#fff', borderColor: '#0d9488' }}>
           <Plus size={14}/> Agregar entregable
         </button>}
       </div>
 
-      {!entregables.length && !inicial.error && (
+      {!visibles.length && !inicial.error && (
         <p style={{ padding: 32, textAlign: 'center', fontSize: 13, color: '#64748b', border: '1px dashed #cbd5e1', borderRadius: 10 }}>
-          {soloLectura ? 'Este proyecto todavía no tiene entregables para mostrar en el reporte.' : 'Este proyecto todavía no tiene entregables. Agrega el primero para crear sus actividades y etapas.'}
+          {panorama ? 'Este proyecto todavía no tiene entregables para mostrar.' : 'No hay elementos asignados a esta persona. Puedes crear su primer entregable desde Tareas Activas.'}
         </p>
       )}
-      {entregables.map((ent, ei) => (
+      {visibles.map((ent, ei) => (
         <section key={ent.id} aria-label={`Entregable ${ei + 1}`} style={{ marginBottom: 14, border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden', background: '#fff' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '10px 14px', background: '#fff7f9' }}>
             {!soloLectura && <button type="button" aria-label={`Desplegar entregable ${ei + 1}`} aria-expanded={abiertos.has(ent.id)} aria-controls={`contenido-${ent.id}`} onClick={() => alternar(ent.id)} style={{ ...desplegar, color: '#9f1239' }}>
               {abiertos.has(ent.id) ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
             </button>}
-            {soloLectura ? <h3 style={{ ...texto, margin: 0, color: '#9f1239' }}>{ent.label || 'Sin nombre'}</h3> : <input aria-label={`Nombre del entregable ${ei + 1}`} value={ent.label} placeholder="Nombre del entregable"
-              onChange={ev => aplicar(entregables.map(e => e.id === ent.id ? { ...e, label: ev.target.value } : e))}
+            {!editable(ent) ? <h3 style={{ ...texto, margin: 0, color: '#9f1239' }}>{ent.label || 'Sin nombre'}</h3> : <input aria-label={`Nombre del entregable ${ei + 1}`} value={ent.label} placeholder="Nombre del entregable"
+              onChange={ev => { if (editable(ent)) aplicar(entregables.map(e => e.id === ent.id ? { ...e, label: ev.target.value } : e)); }}
               style={{ ...campo, fontWeight: 600, color: '#9f1239' }}/>}
+            {responsable(ent, `del entregable ${ei + 1}`, id =>
+              aplicar(entregables.map(e => e.id === ent.id ? { ...e, responsableId: id } : e)))}
+            {!panorama && !editable(ent) && !soloLectura && <span style={badge}>Contexto · solo lectura</span>}
             <span style={badge}>{ent.activities.length} {ent.activities.length === 1 ? 'actividad' : 'actividades'}</span>
-            {!soloLectura && <button type="button" onClick={() => agregarActividad(ent.id)} style={accion}><Plus size={13}/> Agregar actividad</button>}
+            {puedeCrear && <button type="button" onClick={() => agregarActividad(ent.id)} style={accion}><Plus size={13}/> Agregar actividad</button>}
           </div>
           {(soloLectura || abiertos.has(ent.id)) && (
             <div id={`contenido-${ent.id}`} style={{ padding: 14, borderTop: '1px solid #f1f5f9' }}>
               {!ent.activities.length && <p style={{ margin: '8px 0', color: '#94a3b8', fontSize: 12 }}>{soloLectura ? 'Sin actividades.' : 'Sin actividades. Agrega una actividad a este entregable.'}</p>}
               {ent.activities.map((act, ai) => {
-                const tarea = plan.tareas.find(t => t.id === act.id);
+                const tarea = planActual.tareas.find(t => t.id === act.id);
                 const estado = tarea ? estadoDe(tarea.estado) : null;
                 const etapasActividad = act.etapas ?? [];
-                const total = etapasActividad.reduce((s, et) => s + et.peso, 0);
+                const completa = entregables.find(e => e.id === ent.id)!.activities.find(a => a.id === act.id)!;
+                const total = (completa.etapas ?? []).reduce((s, et) => s + et.peso, 0);
                 const correcto = total === 100;
                 return (
                   <section key={act.id} aria-label={`Actividad ${ei + 1}.${ai + 1}`} style={{ marginBottom: 8, border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
@@ -199,39 +300,46 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
                       {!soloLectura && <button type="button" aria-label={`Desplegar actividad ${ei + 1}.${ai + 1}`} aria-expanded={abiertos.has(act.id)} aria-controls={`contenido-${act.id}`} onClick={() => alternar(act.id)} style={{ ...desplegar, color: '#0d9488' }}>
                         {abiertos.has(act.id) ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}
                       </button>}
-                      {soloLectura ? <h4 style={{ ...texto, margin: 0 }}>{act.label || 'Sin nombre'}</h4> : <input aria-label={`Nombre de la actividad ${ei + 1}.${ai + 1}`} value={act.label} placeholder="Nombre de la actividad"
-                        onChange={ev => cambiarActividad(ent.id, act.id, a => ({ ...a, label: ev.target.value }))} style={campo}/>}
+                      {!editable(act) ? <h4 style={{ ...texto, margin: 0 }}>{act.label || 'Sin nombre'}</h4> : <input aria-label={`Nombre de la actividad ${ei + 1}.${ai + 1}`} value={act.label} placeholder="Nombre de la actividad"
+                        onChange={ev => { if (editable(act)) cambiarActividad(ent.id, act.id, a => ({ ...a, label: ev.target.value })); }} style={campo}/>}
+                      {responsable(act, `de la actividad ${ei + 1}.${ai + 1}`, id =>
+                        cambiarActividad(ent.id, act.id!, a => ({ ...a, responsableId: id })))}
+                      {!panorama && !editable(act) && !soloLectura && <span style={badge}>Contexto · solo lectura</span>}
                       {tarea && estado ? (
                         <>
                           <span style={{ ...badge, background: estado.fondo, color: estado.texto }}>{estado.label}</span>
                           <span style={{ fontSize: 12, fontWeight: 700, color: '#334155' }}>{tarea.pct}%</span>
-                          {!soloLectura && <button type="button" style={accion} onClick={() => onAvance(tarea.id)} aria-label={`Actualizar avance de ${tarea.nombre}`}>Actualizar avance</button>}
                         </>
                       ) : <span style={{ ...badge, background: '#f1f5f9', color: '#64748b' }}>Sin seguimiento</span>}
-                      {!soloLectura && <button type="button" onClick={() => agregarEtapa(ent.id, act.id)} style={accion}><Plus size={12}/> Agregar etapa</button>}
+                      {editable(act) && <button type="button" style={accion} onClick={() => { if (editable(act)) setAbierta(act.id!); }} aria-label={`Actualizar avance de ${act.label}`}>Actualizar avance</button>}
+                      {puedeCrear && <button type="button" onClick={() => agregarEtapa(ent.id, act.id!)} style={accion}><Plus size={12}/> Agregar etapa</button>}
                     </div>
                     {(soloLectura || abiertos.has(act.id)) && (
                       <div id={`contenido-${act.id}`} style={{ padding: '12px 14px', borderTop: '1px solid #f1f5f9', background: '#fafcff' }}>
                         {tarea && <p style={{ margin: '0 0 10px', color: '#64748b', fontSize: 12 }}>Responsable: {tarea.responsable || 'Sin asignar'}</p>}
                         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                           <strong style={{ fontSize: 12, color: '#475569' }}>Etapas de avance</strong>
-                          {etapasActividad.length > 0 && <span role="status" style={{ fontSize: 11, fontWeight: 600, color: correcto ? '#15803d' : '#dc2626' }}>
+                          {(completa.etapas?.length ?? 0) > 0 && <span role="status" style={{ fontSize: 11, fontWeight: 600, color: correcto ? '#15803d' : '#dc2626' }}>
                             {correcto ? 'Suma correcta: 100%' : `Las etapas suman ${total}%; deben sumar 100%`}
+                            {!panorama && completa.etapas?.length !== etapasActividad.length && ' · total de toda la actividad'}
                           </span>}
                         </div>
                         {!etapasActividad.length && <p style={{ margin: 0, fontSize: 12, color: '#94a3b8' }}>{soloLectura ? 'Sin etapas.' : 'Sin etapas. Agrega etapas para definir su distribución porcentual.'}</p>}
                         {etapasActividad.map((et, eti) => (
                           <div key={et.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '7px 10px', marginBottom: 6, border: '1px solid #e2e8f0', borderRadius: 7, background: '#f8fafc' }}>
                             <span style={{ fontSize: 11, color: '#94a3b8' }}>{eti + 1}.</span>
-                            {soloLectura ? <span style={texto}>{et.label || 'Sin nombre'}</span> : <input aria-label={`Nombre de la etapa ${ei + 1}.${ai + 1}.${eti + 1}`} value={et.label} placeholder="Nombre de la etapa" style={campo}
-                              onChange={ev => cambiarActividad(ent.id, act.id, a => ({ ...a, etapas: (a.etapas ?? []).map(e => e.id === et.id ? { ...e, label: ev.target.value } : e) }))}/>}
-                            {soloLectura ? <span style={{ fontSize: 12, color: '#64748b' }}>Peso: {et.peso}%</span> : <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11, color: '#64748b' }}>
+                            {!editable(et) ? <span style={texto}>{et.label || 'Sin nombre'}</span> : <input aria-label={`Nombre de la etapa ${ei + 1}.${ai + 1}.${eti + 1}`} value={et.label} placeholder="Nombre de la etapa" style={campo}
+                              onChange={ev => { if (editable(et)) cambiarActividad(ent.id, act.id!, a => ({ ...a, etapas: (a.etapas ?? []).map(e => e.id === et.id ? { ...e, label: ev.target.value } : e) })); }}/>}
+                            {responsable(et, `de la etapa ${ei + 1}.${ai + 1}.${eti + 1}`, id =>
+                              cambiarActividad(ent.id, act.id!, a => ({ ...a, etapas: (a.etapas ?? []).map(e => e.id === et.id ? { ...e, responsableId: id } : e) })))}
+                            {!editable(et) ? <span style={{ fontSize: 12, color: '#64748b' }}>Peso: {et.peso}%</span> : <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11, color: '#64748b' }}>
                               Peso
                               <input aria-label={`Peso de la etapa ${ei + 1}.${ai + 1}.${eti + 1}`} type="number" min={0} max={100} step={1} value={et.peso}
                                 style={{ ...campo, flex: '0 0 auto', width: 65, textAlign: 'center', fontWeight: 600 }}
                                 onChange={ev => {
+                                  if (!editable(et)) return;
                                   const peso = Math.min(100, Math.max(0, Math.round(Number(ev.target.value) || 0)));
-                                  cambiarActividad(ent.id, act.id, a => ({ ...a, etapas: (a.etapas ?? []).map(e => e.id === et.id ? { ...e, peso } : e) }));
+                                  cambiarActividad(ent.id, act.id!, a => ({ ...a, etapas: (a.etapas ?? []).map(e => e.id === et.id ? { ...e, peso } : e) }));
                                 }}/>
                               %
                             </label>}
@@ -247,6 +355,9 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
         </section>
       ))}
       </div>
+      {tareaAbierta && actAbierta && <React.Fragment key={tareaAbierta.id}><PanelAvance plan={planActual} tarea={tareaAbierta}
+        equipoPermitido={personal ? equipo.filter(u => u.id === usuario.id) : equipo}
+        responsableId={actAbierta.responsableId} onGuardar={guardarAvance} onCerrar={() => setAbierta(null)}/></React.Fragment>}
     </section>
   );
 }
