@@ -1,36 +1,10 @@
 import React, { useState } from 'react';
 import { CheckSquare, ChevronDown, ChevronRight, Info, LayoutList, Plus, Settings2 } from 'lucide-react';
-import { nuevoId } from './almacen';
+import { guardarEstructura, leerEstructura, nuevoId } from './almacen';
 import { estadoDe, type PlanTym } from './tipos';
+import type { PlanActivityStructure, PlanEntregableStructure } from '../../lib/planStructure';
 
-interface EtapaVisual {
-  id: string;
-  nombre: string;
-  peso: number;
-}
-
-interface ActividadVisual {
-  id: string;
-  tareaId?: string;
-  nombre: string;
-  etapas: EtapaVisual[];
-}
-
-interface EntregableVisual {
-  id: string;
-  nombre: string;
-  actividades: ActividadVisual[];
-}
-
-function borradorDe(plan: PlanTym): EntregableVisual[] {
-  const bloques = [...new Set([...plan.bloques, ...plan.tareas.map(t => t.bloque)].map(b => b || 'General'))];
-  return bloques.map(nombre => ({
-    id: nuevoId(), nombre,
-    actividades: plan.tareas.filter(t => (t.bloque || 'General') === nombre).map(t => ({
-      id: t.id, tareaId: t.id, nombre: t.nombre, etapas: [],
-    })),
-  }));
-}
+const mensajeError = (error: unknown) => error instanceof Error ? error.message : 'No se pudo acceder al almacenamiento de este navegador.';
 
 const campo: React.CSSProperties = {
   minWidth: 0, flex: '1 1 180px', padding: '7px 10px', fontSize: 12,
@@ -57,10 +31,28 @@ const PESTANAS = [
 export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance: (id: string) => void }) {
   const [pestana, setPestana] = useState<typeof PESTANAS[number]['id']>('activas');
   const soloLectura = pestana === 'historico';
-  const [entregables, setEntregables] = useState(() => borradorDe(plan));
+  const [inicial] = useState<{ entregables: PlanEntregableStructure[]; error: string }>(() => {
+    try { return { entregables: leerEstructura(plan).entregables, error: '' }; }
+    catch (error) { return { entregables: [], error: mensajeError(error) }; }
+  });
+  const [entregables, setEntregables] = useState(inicial.entregables);
+  const [errorGuardado, setErrorGuardado] = useState(inicial.error);
+  const [guardado, setGuardado] = useState(false);
   const [abiertos, setAbiertos] = useState<Set<string>>(() => new Set(entregables.slice(0, 1).map(e => e.id)));
-  const actividades = entregables.flatMap(e => e.actividades);
-  const etapas = actividades.flatMap(a => a.etapas);
+  const actividades = entregables.flatMap(e => e.activities);
+  const etapas = actividades.flatMap(a => a.etapas ?? []);
+
+  function aplicar(siguiente: PlanEntregableStructure[]) {
+    setEntregables(siguiente);
+    try {
+      guardarEstructura(plan.projectId, siguiente);
+      setErrorGuardado('');
+      setGuardado(true);
+    } catch (error) {
+      setErrorGuardado(mensajeError(error));
+      setGuardado(false);
+    }
+  }
 
   function abrir(id: string) {
     setAbiertos(actual => new Set([...actual, id]));
@@ -74,29 +66,30 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
     });
   }
 
-  function cambiarActividad(entId: string, actId: string, transformar: (a: ActividadVisual) => ActividadVisual) {
-    setEntregables(actual => actual.map(e => e.id !== entId ? e : {
-      ...e, actividades: e.actividades.map(a => a.id === actId ? transformar(a) : a),
+  function cambiarActividad(entId: string, actId: string, transformar: (a: PlanActivityStructure) => PlanActivityStructure) {
+    aplicar(entregables.map(e => e.id !== entId ? e : {
+      ...e, activities: e.activities.map(a => a.id === actId ? transformar(a) : a),
     }));
   }
 
   function agregarEntregable() {
-    const nuevo: EntregableVisual = { id: nuevoId(), nombre: 'Nuevo entregable', actividades: [] };
-    setEntregables(actual => [...actual, nuevo]);
+    const nuevo: PlanEntregableStructure = { id: nuevoId(), label: 'Nuevo entregable', activities: [] };
+    aplicar([...entregables, nuevo]);
     abrir(nuevo.id);
   }
 
   function agregarActividad(entId: string) {
-    const nueva: ActividadVisual = { id: nuevoId(), nombre: 'Nueva actividad', etapas: [] };
-    setEntregables(actual => actual.map(e => e.id === entId ? { ...e, actividades: [...e.actividades, nueva] } : e));
-    setAbiertos(actual => new Set([...actual, entId, nueva.id]));
+    const id = nuevoId();
+    const nueva: PlanActivityStructure = { id, label: 'Nueva actividad', etapas: [] };
+    aplicar(entregables.map(e => e.id === entId ? { ...e, activities: [...e.activities, nueva] } : e));
+    setAbiertos(actual => new Set([...actual, entId, id]));
   }
 
   function agregarEtapa(entId: string, actId: string) {
     const id = nuevoId();
     cambiarActividad(entId, actId, a => ({
-      ...a, etapas: [...a.etapas, {
-        id, nombre: 'Nueva etapa', peso: Math.max(0, 100 - a.etapas.reduce((s, et) => s + et.peso, 0)),
+      ...a, etapas: [...(a.etapas ?? []), {
+        id, label: 'Nueva etapa', peso: Math.max(0, 100 - (a.etapas ?? []).reduce((s, et) => s + et.peso, 0)),
       }],
     }));
     abrir(actId);
@@ -135,13 +128,18 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
       }}>
         <Info size={17} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden="true"/>
         <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6 }}>
-          <strong>Simulación visual.</strong> Los entregables, nombres, actividades y etapas que edites en Tareas Activas
-          son temporales y se descartan al salir o recargar. No se envían al servidor.
+          <strong>Almacenamiento local.</strong> Los entregables, nombres, actividades y etapas se guardan automáticamente
+          en este navegador. La integración con el backend está pendiente; no se comparten entre dispositivos.
           {' '}<strong>Guardar avance</strong> de una tarea existente desde Tareas Activas sí conserva sus cambios e historial.
           Los pesos de etapas no modifican el avance real.
-          {soloLectura && ' Este reporte refleja la estructura temporal actual, no versiones históricas guardadas.'}
+          {soloLectura && ' Este reporte refleja la estructura actual, no versiones históricas guardadas.'}
         </p>
       </div>
+      {errorGuardado && <div role="alert" style={{ padding: 14, marginBottom: 16, border: '1px solid #fca5a5', borderRadius: 8, color: '#b91c1c', background: '#fef2f2' }}>
+        No se pudieron guardar o cargar los cambios: {errorGuardado} Los cambios visibles sin guardar se perderán al salir.
+        {!inicial.error && !soloLectura && <button type="button" onClick={() => aplicar(entregables)} style={{ ...accion, marginLeft: 10 }}>Reintentar guardado</button>}
+      </div>}
+      {!errorGuardado && guardado && <p role="status" style={{ fontSize: 12, color: '#15803d' }}>Cambios guardados en este navegador.</p>}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8, marginBottom: 18 }}>
         {[
@@ -153,7 +151,7 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
             {s.icono}
             <div>
               <strong style={{ display: 'block', fontSize: 22 }}>{s.cantidad}</strong>
-              <span style={{ fontSize: 11 }}>{s.nombre} · vista temporal</span>
+              <span style={{ fontSize: 11 }}>{s.nombre} · estructura local</span>
             </div>
           </div>
         ))}
@@ -164,12 +162,12 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
           <h2 style={{ margin: 0, fontSize: 15, color: '#334155' }}>{soloLectura ? 'Reporte Histórico' : 'Detalle del proyecto'}</h2>
           <p style={{ margin: '4px 0 0', fontSize: 12, color: '#64748b' }}>Entregables, actividades y etapas de avance · sin cronograma</p>
         </div>
-        {!soloLectura && <button type="button" onClick={agregarEntregable} style={{ ...accion, background: '#0d9488', color: '#fff', borderColor: '#0d9488' }}>
+        {!soloLectura && !inicial.error && <button type="button" onClick={agregarEntregable} style={{ ...accion, background: '#0d9488', color: '#fff', borderColor: '#0d9488' }}>
           <Plus size={14}/> Agregar entregable
         </button>}
       </div>
 
-      {!entregables.length && (
+      {!entregables.length && !inicial.error && (
         <p style={{ padding: 32, textAlign: 'center', fontSize: 13, color: '#64748b', border: '1px dashed #cbd5e1', borderRadius: 10 }}>
           {soloLectura ? 'Este proyecto todavía no tiene entregables para mostrar en el reporte.' : 'Este proyecto todavía no tiene entregables. Agrega el primero para crear sus actividades y etapas.'}
         </p>
@@ -180,19 +178,20 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
             {!soloLectura && <button type="button" aria-label={`Desplegar entregable ${ei + 1}`} aria-expanded={abiertos.has(ent.id)} aria-controls={`contenido-${ent.id}`} onClick={() => alternar(ent.id)} style={{ ...desplegar, color: '#9f1239' }}>
               {abiertos.has(ent.id) ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
             </button>}
-            {soloLectura ? <h3 style={{ ...texto, margin: 0, color: '#9f1239' }}>{ent.nombre || 'Sin nombre'}</h3> : <input aria-label={`Nombre del entregable ${ei + 1}`} value={ent.nombre} placeholder="Nombre del entregable"
-              onChange={ev => setEntregables(actual => actual.map(e => e.id === ent.id ? { ...e, nombre: ev.target.value } : e))}
+            {soloLectura ? <h3 style={{ ...texto, margin: 0, color: '#9f1239' }}>{ent.label || 'Sin nombre'}</h3> : <input aria-label={`Nombre del entregable ${ei + 1}`} value={ent.label} placeholder="Nombre del entregable"
+              onChange={ev => aplicar(entregables.map(e => e.id === ent.id ? { ...e, label: ev.target.value } : e))}
               style={{ ...campo, fontWeight: 600, color: '#9f1239' }}/>}
-            <span style={badge}>{ent.actividades.length} {ent.actividades.length === 1 ? 'actividad' : 'actividades'}</span>
+            <span style={badge}>{ent.activities.length} {ent.activities.length === 1 ? 'actividad' : 'actividades'}</span>
             {!soloLectura && <button type="button" onClick={() => agregarActividad(ent.id)} style={accion}><Plus size={13}/> Agregar actividad</button>}
           </div>
           {(soloLectura || abiertos.has(ent.id)) && (
             <div id={`contenido-${ent.id}`} style={{ padding: 14, borderTop: '1px solid #f1f5f9' }}>
-              {!ent.actividades.length && <p style={{ margin: '8px 0', color: '#94a3b8', fontSize: 12 }}>{soloLectura ? 'Sin actividades.' : 'Sin actividades. Agrega una actividad a este entregable.'}</p>}
-              {ent.actividades.map((act, ai) => {
-                const tarea = plan.tareas.find(t => t.id === act.tareaId);
+              {!ent.activities.length && <p style={{ margin: '8px 0', color: '#94a3b8', fontSize: 12 }}>{soloLectura ? 'Sin actividades.' : 'Sin actividades. Agrega una actividad a este entregable.'}</p>}
+              {ent.activities.map((act, ai) => {
+                const tarea = plan.tareas.find(t => t.id === act.id);
                 const estado = tarea ? estadoDe(tarea.estado) : null;
-                const total = act.etapas.reduce((s, et) => s + et.peso, 0);
+                const etapasActividad = act.etapas ?? [];
+                const total = etapasActividad.reduce((s, et) => s + et.peso, 0);
                 const correcto = total === 100;
                 return (
                   <section key={act.id} aria-label={`Actividad ${ei + 1}.${ai + 1}`} style={{ marginBottom: 8, border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
@@ -200,15 +199,15 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
                       {!soloLectura && <button type="button" aria-label={`Desplegar actividad ${ei + 1}.${ai + 1}`} aria-expanded={abiertos.has(act.id)} aria-controls={`contenido-${act.id}`} onClick={() => alternar(act.id)} style={{ ...desplegar, color: '#0d9488' }}>
                         {abiertos.has(act.id) ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}
                       </button>}
-                      {soloLectura ? <h4 style={{ ...texto, margin: 0 }}>{act.nombre || 'Sin nombre'}</h4> : <input aria-label={`Nombre de la actividad ${ei + 1}.${ai + 1}`} value={act.nombre} placeholder="Nombre de la actividad"
-                        onChange={ev => cambiarActividad(ent.id, act.id, a => ({ ...a, nombre: ev.target.value }))} style={campo}/>}
+                      {soloLectura ? <h4 style={{ ...texto, margin: 0 }}>{act.label || 'Sin nombre'}</h4> : <input aria-label={`Nombre de la actividad ${ei + 1}.${ai + 1}`} value={act.label} placeholder="Nombre de la actividad"
+                        onChange={ev => cambiarActividad(ent.id, act.id, a => ({ ...a, label: ev.target.value }))} style={campo}/>}
                       {tarea && estado ? (
                         <>
                           <span style={{ ...badge, background: estado.fondo, color: estado.texto }}>{estado.label}</span>
                           <span style={{ fontSize: 12, fontWeight: 700, color: '#334155' }}>{tarea.pct}%</span>
                           {!soloLectura && <button type="button" style={accion} onClick={() => onAvance(tarea.id)} aria-label={`Actualizar avance de ${tarea.nombre}`}>Actualizar avance</button>}
                         </>
-                      ) : <span style={{ ...badge, background: '#fffbeb', color: '#92400e' }}>Simulada · sin guardar</span>}
+                      ) : <span style={{ ...badge, background: '#f1f5f9', color: '#64748b' }}>Sin seguimiento</span>}
                       {!soloLectura && <button type="button" onClick={() => agregarEtapa(ent.id, act.id)} style={accion}><Plus size={12}/> Agregar etapa</button>}
                     </div>
                     {(soloLectura || abiertos.has(act.id)) && (
@@ -216,23 +215,23 @@ export default function DetalleTym({ plan, onAvance }: { plan: PlanTym; onAvance
                         {tarea && <p style={{ margin: '0 0 10px', color: '#64748b', fontSize: 12 }}>Responsable: {tarea.responsable || 'Sin asignar'}</p>}
                         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                           <strong style={{ fontSize: 12, color: '#475569' }}>Etapas de avance</strong>
-                          {act.etapas.length > 0 && <span role="status" style={{ fontSize: 11, fontWeight: 600, color: correcto ? '#15803d' : '#dc2626' }}>
+                          {etapasActividad.length > 0 && <span role="status" style={{ fontSize: 11, fontWeight: 600, color: correcto ? '#15803d' : '#dc2626' }}>
                             {correcto ? 'Suma correcta: 100%' : `Las etapas suman ${total}%; deben sumar 100%`}
                           </span>}
                         </div>
-                        {!act.etapas.length && <p style={{ margin: 0, fontSize: 12, color: '#94a3b8' }}>{soloLectura ? 'Sin etapas.' : 'Sin etapas. Agrega etapas para simular su distribución porcentual.'}</p>}
-                        {act.etapas.map((et, eti) => (
+                        {!etapasActividad.length && <p style={{ margin: 0, fontSize: 12, color: '#94a3b8' }}>{soloLectura ? 'Sin etapas.' : 'Sin etapas. Agrega etapas para definir su distribución porcentual.'}</p>}
+                        {etapasActividad.map((et, eti) => (
                           <div key={et.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '7px 10px', marginBottom: 6, border: '1px solid #e2e8f0', borderRadius: 7, background: '#f8fafc' }}>
                             <span style={{ fontSize: 11, color: '#94a3b8' }}>{eti + 1}.</span>
-                            {soloLectura ? <span style={texto}>{et.nombre || 'Sin nombre'}</span> : <input aria-label={`Nombre de la etapa ${ei + 1}.${ai + 1}.${eti + 1}`} value={et.nombre} placeholder="Nombre de la etapa" style={campo}
-                              onChange={ev => cambiarActividad(ent.id, act.id, a => ({ ...a, etapas: a.etapas.map(e => e.id === et.id ? { ...e, nombre: ev.target.value } : e) }))}/>}
+                            {soloLectura ? <span style={texto}>{et.label || 'Sin nombre'}</span> : <input aria-label={`Nombre de la etapa ${ei + 1}.${ai + 1}.${eti + 1}`} value={et.label} placeholder="Nombre de la etapa" style={campo}
+                              onChange={ev => cambiarActividad(ent.id, act.id, a => ({ ...a, etapas: (a.etapas ?? []).map(e => e.id === et.id ? { ...e, label: ev.target.value } : e) }))}/>}
                             {soloLectura ? <span style={{ fontSize: 12, color: '#64748b' }}>Peso: {et.peso}%</span> : <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11, color: '#64748b' }}>
                               Peso
                               <input aria-label={`Peso de la etapa ${ei + 1}.${ai + 1}.${eti + 1}`} type="number" min={0} max={100} step={1} value={et.peso}
                                 style={{ ...campo, flex: '0 0 auto', width: 65, textAlign: 'center', fontWeight: 600 }}
                                 onChange={ev => {
                                   const peso = Math.min(100, Math.max(0, Math.round(Number(ev.target.value) || 0)));
-                                  cambiarActividad(ent.id, act.id, a => ({ ...a, etapas: a.etapas.map(e => e.id === et.id ? { ...e, peso } : e) }));
+                                  cambiarActividad(ent.id, act.id, a => ({ ...a, etapas: (a.etapas ?? []).map(e => e.id === et.id ? { ...e, peso } : e) }));
                                 }}/>
                               %
                             </label>}

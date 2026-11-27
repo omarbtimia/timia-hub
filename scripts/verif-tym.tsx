@@ -28,12 +28,26 @@ w.localStorage.setItem('timia_admin_projects', JSON.stringify([
 ]));
 w.localStorage.setItem('timia_admin_users', '[]');
 const requests: { url: string; method: string; body: unknown }[] = [];
+const closed = { projectId: 'CERRADO', totalWeeks: 4, generatedAt: '2026-01-01', entregables: [
+  { id: 'c1', label: 'Entrega cerrada', activities: [{ label: 'Trabajo cerrado', startWeek: 1, endWeek: 4 }] },
+] };
+let remoteConfigs: Record<string, unknown> = { CERRADO: closed };
+let denyNextWrite = false;
 const previousFetch = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   const url = String(input);
   requests.push({ url, method: init?.method ?? 'GET', body: init?.body });
   if (url.endsWith('/api/auth/config')) {
     return Response.json({ demo: true, google: false, googleClientId: null, allowedDomains: [] });
+  }
+  if (url.endsWith('/api/state') && !init?.method) return Response.json({ timia_plan_configs: remoteConfigs });
+  if (url.endsWith('/api/state/timia_plan_configs')) {
+    if (init?.method !== 'PUT') return Response.json(remoteConfigs);
+    if (denyNextWrite) {
+      denyNextWrite = false;
+      return Response.json({ detail: 'Prueba de permisos' }, { status: 403 });
+    }
+    return Response.json({ ok: true });
   }
   assert.equal(init?.method, 'PUT', `Solicitud inesperada: ${url}`);
   assert.ok(url.endsWith('/api/state/timia_tym_planes'), `Clave inesperada: ${url}`);
@@ -43,7 +57,9 @@ globalThis.fetch = async (input, init) => {
 const React = (await import('react')).default;
 const { act } = await import('react');
 const { createRoot } = await import('react-dom/client');
-const { probeApi, persist } = await import('../src/lib/persist');
+const { probeApi, persist, loadStateFromApi, persistRefresh } = await import('../src/lib/persist');
+const { adminStore } = await import('../src/lib/adminStore');
+const { leerEstructura, guardarEstructura, leerPlan } = await import('../src/modules/tym/almacen');
 const ProyectoTym = (await import('../src/modules/tym/ProyectoTym')).default;
 await probeApi();
 assert.equal(persist.mode, 'api');
@@ -106,6 +122,7 @@ try {
   assert.equal(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim(), 'Tareas Activas');
   sinTarjetasGlobales();
   const before = snapshot();
+  assert.equal(w.localStorage.getItem('timia_plan_configs'), null, 'Consultar no guarda una estructura nueva');
   assert.equal(named('Nombre del entregable 1').value, 'Soporte');
   assert.equal(named('Nombre del entregable 2').value, 'Vacío');
   assert.equal(named('Nombre del entregable 3').value, 'General');
@@ -139,7 +156,7 @@ try {
   await click('Agregar actividad', container.querySelector('[aria-label="Entregable 1"]')!);
   assert.equal(named('Nombre de la actividad 1.2').value, 'Nueva actividad');
   const simulated = container.querySelector('[aria-label="Actividad 1.2"]')!;
-  assert.ok(simulated.textContent?.includes('Simulada'));
+  assert.ok(simulated.textContent?.includes('Sin seguimiento'));
   assert.equal(simulated.querySelector('[aria-label^="Actualizar avance"]'), null);
 
   await click('Agregar entregable');
@@ -147,10 +164,19 @@ try {
   await click('Agregar actividad', container.querySelector('[aria-label="Entregable 4"]')!);
   await click('Agregar etapa', container.querySelector('[aria-label="Actividad 4.1"]')!);
   assert.equal(named('Peso de la etapa 4.1.1').value, '100');
-  assert.equal(snapshot(), before, 'La simulación no escribe en localStorage');
-  assert.equal(persist.pendingWrites, 0, 'La simulación no encola escrituras');
-  assert.equal(requests.length, 0, 'La simulación no llama a la API');
-  console.log('OK: jerarquía, inserciones, nombres, pesos y simulación sin escrituras');
+  assert.notEqual(snapshot(), before, 'La estructura se guarda en localStorage');
+  const estructuraGuardada = w.localStorage.getItem('timia_plan_configs')!;
+  const estructura = JSON.parse(estructuraGuardada).DEMO;
+  assert.deepEqual(Object.keys(estructura).sort(), ['entregables', 'projectId']);
+  assert.deepEqual(Object.keys(estructura.entregables[0]).sort(), ['activities', 'id', 'label']);
+  assert.deepEqual(Object.keys(estructura.entregables[0].activities[0]).sort(), ['etapas', 'id', 'label']);
+  assert.deepEqual(Object.keys(estructura.entregables[0].activities[0].etapas[0]).sort(), ['id', 'label', 'peso']);
+  assert.equal(estructura.entregables[0].activities[0].id, 'real-1');
+  assert.deepEqual(JSON.parse(w.localStorage.getItem('timia_tym_planes')!).DEMO, original);
+  assert.equal(persist.pendingWrites, 0, 'El guardado local no encola escrituras');
+  assert.equal(requests.length, 0, 'El guardado de estructura no llama a la API');
+  const despuesDeEditar = snapshot();
+  console.log('OK: jerarquía y formato compartido guardados localmente sin API');
 
   await click('Desplegar entregable 1');
   await click('Desplegar entregable 4');
@@ -164,7 +190,7 @@ try {
   assert.equal(report.querySelectorAll('[aria-label^="Actividad "]').length, 5);
   assert.ok(report.textContent?.includes('no versiones históricas guardadas'));
   sinTarjetasGlobales();
-  assert.equal(snapshot(), before);
+  assert.equal(snapshot(), despuesDeEditar);
   assert.equal(persist.pendingWrites, 0);
   assert.equal(requests.length, 0);
   await click('Tareas Activas');
@@ -213,7 +239,7 @@ try {
   assert.ok(reporte().querySelector('[aria-label="Actividad 1.1"]')?.textContent?.includes('75%'));
   assert.equal(requests.length, 1, 'Consultar el reporte no agrega escrituras');
   await click('Tareas Activas');
-  console.log('OK: avance e historial reales sin filtrar borrador al almacenamiento ni API');
+  console.log('OK: avance e historial reales separados de la estructura local');
 
   await render('VACIO');
   assert.ok(container.textContent?.includes('todavía no tiene entregables'));
@@ -228,17 +254,115 @@ try {
   assert.equal(named('Peso de la etapa 1.1.1').value, '100');
   await render('DEMO');
   assert.equal(container.querySelector('[role="tab"][aria-selected="true"]')?.id, 'tym-tab-activas');
-  assert.equal(named('Nombre del entregable 1').value, 'Soporte');
-  assert.equal(named('Nombre de la actividad 1.1').value, 'Tarea real');
-  assert.equal(container.querySelectorAll('[aria-label^="Nombre del entregable"]').length, 3);
-  assert.equal(container.querySelectorAll('input[type="number"]').length, 0);
+  assert.equal(named('Nombre del entregable 1').value, 'Nombre temporal');
+  assert.equal(named('Nombre de la actividad 1.1').value, 'Actividad renombrada temporal');
+  assert.equal(container.querySelectorAll('[aria-label^="Nombre del entregable"]').length, 4);
+  await click('Desplegar actividad 1.1');
+  assert.equal(named('Nombre de la etapa 1.1.1').value, 'Análisis');
+  assert.equal(named('Peso de la etapa 1.1.1').value, '40');
   assert.ok(container.textContent?.includes('75%'));
   await act(async () => { root.render(null); });
   await render('DEMO');
-  assert.equal(named('Nombre del entregable 1').value, 'Soporte');
+  assert.equal(named('Nombre del entregable 1').value, 'Nombre temporal');
+  assert.equal(JSON.stringify(JSON.parse(w.localStorage.getItem('timia_plan_configs')!).DEMO), JSON.stringify(JSON.parse(estructuraGuardada).DEMO));
   assert.equal(requests.length, 1, 'Cambiar de proyecto y remontar no escribe');
   assert.equal(errors.length, 0, 'Sin errores React');
-  console.log('OK: proyecto vacío, aislamiento por proyecto y descarte al salir');
+  console.log('OK: proyecto vacío, aislamiento por proyecto y persistencia al salir');
+
+  const mapaLocal = JSON.parse(w.localStorage.getItem('timia_plan_configs')!);
+  const expectedLocal = mapaLocal.DEMO;
+  const originalClosed = structuredClone(closed);
+  await loadStateFromApi();
+  assert.deepEqual(JSON.parse(w.localStorage.getItem('timia_plan_configs')!).DEMO, expectedLocal);
+  assert.deepEqual(adminStore.getPlanConfigs(), { CERRADO: closed });
+  assert.equal(adminStore.getPlanConfig('DEMO'), null);
+  assert.equal(adminStore.getProjectCronogramas('DEMO').length, 0);
+  assert.equal(adminStore.getProjectCronogramas('CERRADO').length, 1);
+  assert.throws(() => guardarEstructura('CERRADO', []), /cronograma existente/);
+  assert.deepEqual(adminStore.getPlanConfig('CERRADO'), closed, 'No se sobrescribe un cronograma con una estructura T&M');
+  assert.deepEqual(leerEstructura(leerPlan('DEMO')).entregables, expectedLocal.entregables);
+
+  await persistRefresh('timia_plan_configs');
+  assert.deepEqual(JSON.parse(w.localStorage.getItem('timia_plan_configs')!).DEMO, expectedLocal);
+  const beforeClosedWrite = requests.length;
+  adminStore.savePlanConfig('CERRADO', { ...closed, totalWeeks: 5 });
+  await new Promise(resolve => setTimeout(resolve, 450));
+  const closedWrite = requests.slice(beforeClosedWrite).find(r => r.method === 'PUT')!;
+  assert.ok(closedWrite);
+  assert.deepEqual(Object.keys(JSON.parse(String(closedWrite.body)).value), ['CERRADO']);
+  assert.deepEqual(JSON.parse(w.localStorage.getItem('timia_plan_configs')!).DEMO, expectedLocal);
+  assert.equal(adminStore.getPlanConfig('CERRADO')?.totalWeeks, 5);
+
+  const beacons: Blob[] = [];
+  Object.defineProperty(w.navigator, 'sendBeacon', { configurable: true, value: (_url: string, body: Blob) => { beacons.push(body); return true; } });
+  adminStore.savePlanConfigs({ CERRADO: closed });
+  w.dispatchEvent(new w.Event('beforeunload'));
+  assert.equal(beacons.length, 1);
+  assert.deepEqual(Object.keys(JSON.parse(await beacons[0].text()).value), ['CERRADO']);
+  await new Promise(resolve => setTimeout(resolve, 450));
+  assert.deepEqual(JSON.parse(w.localStorage.getItem('timia_plan_configs')!).DEMO, expectedLocal);
+
+  denyNextWrite = true;
+  adminStore.savePlanConfig('CERRADO', closed);
+  await new Promise(resolve => setTimeout(resolve, 450));
+  assert.deepEqual(JSON.parse(w.localStorage.getItem('timia_plan_configs')!).DEMO, expectedLocal, 'La recuperación por 403 conserva T&M');
+  persist.clearError();
+  assert.deepEqual(closed, originalClosed, 'No se muta el cronograma anterior');
+  console.log('OK: API activa, refresh, guardado cerrado, beacon y recuperación 403 sin filtrar ni perder T&M');
+
+  const realActual = leerPlan('DEMO');
+  w.localStorage.setItem('timia_tym_planes', JSON.stringify({ DEMO: {
+    ...realActual, tareas: [...realActual.tareas, { id: 'posterior', nombre: 'Agregada después', bloque: 'General', pct: 0, estado: 'en-curso', creada: '2026-01-01' }],
+  } }));
+  const reconciliada = leerEstructura(leerPlan('DEMO'));
+  assert.equal(reconciliada.entregables.flatMap(e => e.activities).filter(a => a.id === 'posterior').length, 1);
+  assert.equal(reconciliada.entregables[0].activities[0].label, 'Actividad renombrada temporal');
+  guardarEstructura('DEMO', reconciliada.entregables);
+  assert.deepEqual(leerEstructura(leerPlan('DEMO')), reconciliada, 'Reconciliar dos veces no duplica tareas');
+  assert.deepEqual(adminStore.getPlanConfig('CERRADO'), closed);
+
+  const backup = w.localStorage.getItem('timia_plan_configs')!;
+  for (const corrupto of ['{', '[]', JSON.stringify({ DEMO: { projectId: 'DEMO', entregables: [{ id: 'mal', label: 'Datos inválidos', activities: [{}] }] } })]) {
+    await render('OTRO');
+    w.localStorage.setItem('timia_plan_configs', corrupto);
+    await render('DEMO');
+    assert.ok(container.querySelector('[role="alert"]'));
+    assert.equal(Array.from(container.querySelectorAll('button')).some(b => b.textContent?.includes('Agregar entregable')), false);
+    assert.equal(w.localStorage.getItem('timia_plan_configs'), corrupto);
+    await click('Reporte Histórico');
+    reporte();
+    assert.equal(w.localStorage.getItem('timia_plan_configs'), corrupto);
+  }
+  w.localStorage.setItem('timia_plan_configs', backup);
+  await render('OTRO');
+  await render('DEMO');
+  const storagePrototype = w.Storage.prototype;
+  const setItemOriginal = storagePrototype.setItem;
+  try {
+    storagePrototype.setItem = function(key, value) {
+      if (key === 'timia_plan_configs') throw new w.DOMException('Almacenamiento lleno', 'QuotaExceededError');
+      setItemOriginal.call(this, key, value);
+    };
+    await edit(named('Nombre del entregable 1'), 'Cambio pendiente de espacio');
+    assert.ok(container.querySelector('[role="alert"]')?.textContent?.includes('Almacenamiento lleno'));
+    assert.equal(named('Nombre del entregable 1').value, 'Cambio pendiente de espacio', 'El fallo no descarta la edición');
+    assert.equal(w.localStorage.getItem('timia_plan_configs'), backup);
+  } finally { storagePrototype.setItem = setItemOriginal; }
+  await click('Reintentar guardado');
+  assert.equal(container.querySelector('[role="alert"]'), null);
+  assert.equal(JSON.parse(w.localStorage.getItem('timia_plan_configs')!).DEMO.entregables[0].label, 'Cambio pendiente de espacio');
+  await render('OTRO');
+  const getItemOriginal = storagePrototype.getItem;
+  try {
+    storagePrototype.getItem = function(key) {
+      if (key === 'timia_plan_configs') throw new w.DOMException('Acceso denegado', 'SecurityError');
+      return getItemOriginal.call(this, key);
+    };
+    await render('DEMO');
+    assert.ok(container.querySelector('[role="alert"]')?.textContent?.includes('Acceso denegado'));
+  } finally { storagePrototype.getItem = getItemOriginal; }
+  assert.equal(errors.length, 0);
+  console.log('OK: reconciliación por id, datos corruptos, almacenamiento lleno y acceso bloqueado sin pérdida silenciosa');
 } finally {
   await act(async () => { root.unmount(); });
   console.error = previousError;

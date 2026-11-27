@@ -3,9 +3,9 @@
 // así que no se estima ni se cronograma. Lo que tiene es una lista de tareas con
 // su avance, y nada que dependa de semanas.
 //
-// Vive aparte del plan de trabajo a propósito. El plan de los proyectos cerrados
-// está bien como está y no se toca: este módulo no importa nada suyo ni lo
-// modifica, y los dos pueden evolucionar sin pisarse.
+// El seguimiento vive aparte del cronograma de proyectos cerrados. La estructura
+// de entregables, actividades y etapas comparte contrato y clave con ellos,
+// pero se guarda localmente y no incorpora semanas ni fechas de planificación.
 
 export type EstadoTarea = 'en-curso' | 'en-espera' | 'finalizada' | 'no-se-requiere';
 

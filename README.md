@@ -28,17 +28,26 @@ actividades y etapas en dos pestañas:
   Conserva todas las actividades, incluidas las finalizadas y las no requeridas.
 - **Reporte Histórico**: la misma estructura actual, completamente desplegada y
   solo lectura, sin controles de edición ni actualización de avance. Refleja el
-  borrador temporal, no versiones históricas almacenadas.
+  contenido actual, no versiones históricas almacenadas.
 
-Al alternar pestañas se conservan el borrador y la expansión de Tareas Activas.
+Al alternar pestañas se conservan la estructura y la expansión de Tareas Activas.
 No se muestran las tarjetas globales de avance real ni tareas cerradas.
-Es posible agregar elementos y editar sus
-nombres y los pesos de etapas como una simulación visual: estos cambios viven
-solo en la pantalla y se descartan al salir, cambiar de proyecto o recargar.
-No se envían a la API ni modifican el cronograma de proyectos cerrados.
+Los entregables, actividades, nombres y pesos de etapas se guardan automáticamente
+en **localStorage**, bajo `timia_plan_configs`, reutilizando la estructura anidada
+de proyectos cerrados (`label`, `activities`, `etapas`, `peso`). Se conservan al
+salir, cambiar de proyecto o recargar, sin agregar fechas ni semanas a T&M.
+El único campo adicional es el `id` opcional de actividad, que conserva el vínculo
+con las tareas existentes al renombrarlas.
+
+Esta estructura es **exclusiva de este navegador**: su backend está pendiente.
+No se envía en los snapshots de configuraciones cerradas ni se reemplaza al cargar
+datos remotos. No modifica `public/db.json` ni se comparte entre dispositivos.
+Los fallos de lectura o guardado se muestran en pantalla; los datos inválidos no
+se sobrescriben automáticamente.
 
 La acción **Actualizar avance** de las tareas existentes mantiene el guardado
 real de porcentaje, estado, responsable e historial. Los pesos simulados no
-recalculan ese avance. Las actividades nuevas no se guardan como tareas.
+recalculan ese avance. Las actividades nuevas se guardan en la estructura, pero no
+se convierten en tareas de seguimiento: se indican como **Sin seguimiento**.
 
 Comprobación enfocada: `npm run verif:tym`.

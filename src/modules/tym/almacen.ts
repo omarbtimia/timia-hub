@@ -1,14 +1,50 @@
 // ─── Proyectos abiertos (T&M) — dónde se guardan ─────────────────────────────
-// Una sola clave de estado, `timia_tym_planes`, con un plan por proyecto. Va por
+// El seguimiento usa `timia_tym_planes`, con un plan por proyecto. Va por
 // la misma capa que el resto del front: localStorage para leer y, si hay API,
 // un PUT por escritura.
 //
-// Una clave sola y no una por proyecto porque cada clave nueva necesita su regla
-// de permisos en el API: sin regla, cualquiera con sesión puede escribirla.
+// La estructura reutiliza timia_plan_configs, pero solo en este navegador:
+// todavía no tiene integración de backend.
 
 import { persistSet } from '../../lib/persist';
 import { adminStore, type AdminProject } from '../../lib/adminStore';
 import { planVacio, type PlanTym, type TareaTym, type CambioTym } from './tipos';
+import { esEstructuraLocal, estructuraValida, leerConfiguraciones, PLAN_CONFIGS_KEY, type PlanStructure, type PlanEntregableStructure } from '../../lib/planStructure';
+
+export function leerEstructura(plan: PlanTym): PlanStructure {
+  const cfg = leerConfiguraciones()[plan.projectId];
+  if (cfg !== undefined && (!esEstructuraLocal(cfg) || !estructuraValida(cfg) || cfg.projectId !== plan.projectId)) {
+    throw new Error('La estructura guardada de este proyecto no es válida. No se sobrescribieron sus datos.');
+  }
+  const estructura: PlanStructure = estructuraValida(cfg)
+    ? structuredClone(cfg)
+    : { projectId: plan.projectId, entregables: [] };
+  const ids = new Set(estructura.entregables.flatMap(e => e.activities.map(a => a.id)));
+  const pendientes = plan.tareas.filter(t => !ids.has(t.id));
+  const bloques = cfg === undefined ? [...plan.bloques, ...pendientes.map(t => t.bloque)] : pendientes.map(t => t.bloque);
+  for (const bloque of [...new Set(bloques.map(b => b || 'General'))]) {
+    let ent = estructura.entregables.find(e => e.label === bloque);
+    if (!ent) {
+      ent = { id: nuevoId(), label: bloque, activities: [] };
+      estructura.entregables.push(ent);
+    }
+    ent.activities.push(...pendientes.filter(t => (t.bloque || 'General') === bloque).map(t => ({
+      id: t.id, label: t.nombre, etapas: [],
+    })));
+  }
+  return estructura;
+}
+
+export function guardarEstructura(projectId: string, entregables: PlanEntregableStructure[]): void {
+  const estructura: PlanStructure = { projectId, entregables };
+  if (!estructuraValida(estructura)) throw new Error('La estructura contiene identificadores o pesos de etapas no válidos.');
+  const all = leerConfiguraciones();
+  const anterior = all[projectId];
+  if (anterior !== undefined && (!esEstructuraLocal(anterior) || !estructuraValida(anterior) || anterior.projectId !== projectId)) {
+    throw new Error('No se puede sobrescribir una configuración inválida o un cronograma existente.');
+  }
+  localStorage.setItem(PLAN_CONFIGS_KEY, JSON.stringify({ ...all, [projectId]: estructura }));
+}
 
 const CLAVE = 'timia_tym_planes';
 

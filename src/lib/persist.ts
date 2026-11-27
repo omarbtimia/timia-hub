@@ -10,7 +10,17 @@
 //   · window.TIMIA_API_URL inyectado en runtime (public/config.js) tiene prioridad.
 //   · 'none' desactiva la API explícitamente.
 
+import { conservarEstructurasLocales, esObjeto, PLAN_CONFIGS_KEY, soloCronogramas } from './planStructure';
+
 export type PersistMode = 'api' | 'local';
+
+function valorRemoto(key: string, value: unknown): unknown {
+  return key === PLAN_CONFIGS_KEY && esObjeto(value) ? soloCronogramas(value) : value;
+}
+
+function cacheRemota(key: string, value: unknown): void {
+  localStorage.setItem(key, JSON.stringify(key === PLAN_CONFIGS_KEY ? conservarEstructurasLocales(value) : value));
+}
 
 declare global { interface Window { TIMIA_API_URL?: string; TIMIA_API_KEY?: string } }
 
@@ -127,7 +137,8 @@ export async function loadStateFromApi(): Promise<boolean> {
   if (!fromApi) return false;
   Object.entries(fromApi).forEach(([key, val]) => {
     if (SEED_SKIP_KEYS.has(key) || !key.startsWith('timia_')) return;
-    try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+    try { cacheRemota(key, val); }
+    catch (error) { console.error(`No se pudo actualizar la caché de ${key}.`, error); }
   });
   return true;
 }
@@ -151,7 +162,7 @@ export async function loadFromApi(): Promise<Record<string, unknown> | null> {
 }
 
 async function flush(key: string, reintento = 0) {
-  const value = state.queue.get(key);
+  const value = valorRemoto(key, state.queue.get(key));
   state.queue.delete(key);
   state.pending.delete(key);
   if (state.mode !== 'api' || state.base === null) return;
@@ -179,7 +190,8 @@ async function flush(key: string, reintento = 0) {
       // Permiso denegado por el servidor: no reintentar, avisar y resincronizar esa colección
       let detail = 'Permiso denegado'; try { detail = (await res.json()).detail ?? detail; } catch {}
       state.failures++; state.lastError = { key, detail, at: Date.now() };
-      try { const r = await fetchWithTimeout(`${state.base}/api/state/${encodeURIComponent(key)}`, { headers: headers(), cache: 'no-store' }, 8000); if (r.ok) localStorage.setItem(key, JSON.stringify(await r.json())); } catch {}
+      try { const r = await fetchWithTimeout(`${state.base}/api/state/${encodeURIComponent(key)}`, { headers: headers(), cache: 'no-store' }, 8000); if (r.ok) cacheRemota(key, await r.json()); }
+      catch (error) { console.error(`No se pudo recuperar la caché de ${key}.`, error); }
       notify(); return;
     }
     if (!res.ok) throw new Error(String(res.status));
@@ -194,9 +206,13 @@ async function flush(key: string, reintento = 0) {
 
 /** Escribe una key: siempre en localStorage; si hay API, la replica (debounce 300 ms por key). */
 export function persistSet(fullKey: string, value: unknown): void {
-  try { localStorage.setItem(fullKey, JSON.stringify(value)); } catch {}
+  if (fullKey === PLAN_CONFIGS_KEY) {
+    cacheRemota(fullKey, value);
+  } else {
+    try { localStorage.setItem(fullKey, JSON.stringify(value)); } catch {}
+  }
   if (state.mode !== 'api') return;
-  state.queue.set(fullKey, value);
+  state.queue.set(fullKey, valorRemoto(fullKey, value));
   const prev = state.pending.get(fullKey);
   if (prev) clearTimeout(prev);
   state.pending.set(fullKey, setTimeout(() => flush(fullKey), 300));
@@ -217,7 +233,7 @@ export async function persistRefresh(fullKey: string): Promise<boolean> {
     const r = await fetchWithTimeout(`${state.base}/api/state/${encodeURIComponent(fullKey)}`,
                                      { headers: headers(), cache: 'no-store' }, 8000);
     if (!r.ok) return false;
-    localStorage.setItem(fullKey, JSON.stringify(await r.json()));
+    cacheRemota(fullKey, await r.json());
     notify();
     return true;
   } catch { return false; }
@@ -233,7 +249,7 @@ if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', () => {
     if (state.mode !== 'api' || state.base === null || !state.queue.size) return;
     state.queue.forEach((value, key) => {
-      try { navigator.sendBeacon?.(`${state.base}/api/state/${encodeURIComponent(key)}?beacon=1`, new Blob([JSON.stringify({ value })], { type: 'application/json' })); } catch {}
+      try { navigator.sendBeacon?.(`${state.base}/api/state/${encodeURIComponent(key)}?beacon=1`, new Blob([JSON.stringify({ value: valorRemoto(key, value) })], { type: 'application/json' })); } catch {}
     });
   });
 }

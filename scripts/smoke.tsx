@@ -20,8 +20,8 @@ w.localStorage.setItem('timia_notes_MIGBD', JSON.stringify({ pasos:['x'] }));
 w.localStorage.setItem('timia_notes_OTRO', 'garbage{');
 // Un proyecto abierto con tareas, para que la vista T&M se monte con contenido
 // y la acción de seguimiento abra el panel de avance.
-w.localStorage.setItem('timia_tym_planes', JSON.stringify({ MIGBD: {
-  projectId: 'MIGBD', bloques: ['Incidencias'],
+w.localStorage.setItem('timia_tym_planes', JSON.stringify({ 'TYM-DEMO': {
+  projectId: 'TYM-DEMO', bloques: ['Incidencias'],
   tareas: [
     { id: 't1', nombre: 'Atención de incidencias', bloque: 'Incidencias', responsable: 'Juliana Garzón', estado: 'en-curso', pct: 60, creada: '2026-11-01T12:00:00Z' },
     { id: 't2', nombre: 'Ajustes de validación', bloque: 'Incidencias', estado: 'finalizada', pct: 100, creada: '2026-11-02T12:00:00Z' },
@@ -100,7 +100,7 @@ let failed = false;
   console.error = (...a:any[]) => { const s = a.join(' '); if (!s.includes('act(')) errors.push('console.error: ' + s.slice(0,300)); };
   for (const acc of auth.MOCK_ACCOUNTS) {
     w.localStorage.setItem('timia_hub_user', JSON.stringify(acc));
-    for (const [name, C, props] of [['Plan', PlanDeTrabajo, {}], ['Estim', Estimaciones, { onViewChange:()=>{}, onBack:()=>{} }], ['Tareas', Bitacora, {}], ['TR', ActivityReport, { user: acc }], ['Dash', PMDashboard, { onViewChange: () => {} }], ['TymProy', ProyectoTym, { projectId: 'MIGBD' }], ['TymTareas', CrearTareas, { projectId: 'MIGBD', onListo: () => {} }]] as any) {
+    for (const [name, C, props] of [['Plan', PlanDeTrabajo, {}], ['Estim', Estimaciones, { onViewChange:()=>{}, onBack:()=>{} }], ['Tareas', Bitacora, {}], ['TR', ActivityReport, { user: acc }], ['Dash', PMDashboard, { onViewChange: () => {} }], ['TymProy', ProyectoTym, { projectId: 'TYM-DEMO' }], ['TymTareas', CrearTareas, { projectId: 'TYM-DEMO', onListo: () => {} }]] as any) {
       const el = w.document.createElement('div'); w.document.body.appendChild(el);
       const root = createRoot(el, { onUncaughtError: (e:any) => errors.push('uncaught: ' + (e?.stack ?? e)), onCaughtError: (e:any) => errors.push('caught: ' + (e?.stack ?? e)) } as any);
       const click = async (label: string) => {

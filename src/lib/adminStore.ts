@@ -3,6 +3,8 @@
 import { PROJECTS as BASE_PROJECTS, normalizeRole, refreshProjects } from '../contexts/AuthContext';
 import { persistSet, persistGet, probeApi, apiMe, loadStateFromApi } from './persist';
 import type { CambioPct } from './historialPlan';
+import { conservarEstructurasLocales, PLAN_CONFIGS_KEY, soloCronogramas, type PlanActivityStructure, type PlanEntregableStructure } from './planStructure';
+export type { PlanEtapa } from './planStructure';
 export { loadStateFromApi } from './persist';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -203,23 +205,6 @@ export function normalizaTarea(t: any): KanbanTask {
 }
 
 // ─── Plan de Trabajo — Etapas y trazabilidad ─────────────────────────────────
-
-/** Una etapa dentro de una actividad del plan */
-export interface PlanEtapa {
-  id: string;
-  label: string;
-  peso: number;           // porcentaje de la actividad que representa (0-100)
-  optional?: boolean;
-  subs?: string[];        // sub-ítems descriptivos (no pesan individualmente)
-  /**
-   * Quién ejecuta esta etapa, igual que en la actividad. Una actividad puede ser
-   * nuestra y aun así tener dentro un paso que depende del banco —el VoBo de
-   * Gobierno, el despliegue en Live—, y ése es justo el que suele atascarse. Sin
-   * marcarlo, la actividad aparece como nuestra y el atasco no se ve venir.
-   * Si falta, la etapa hereda el responsable de su actividad.
-   */
-  resp?: 'timia' | 'bbva' | 'mixto';
-}
 
 /** Etiqueta corta del responsable, para las insignias del plan. */
 export const RESP_ETIQUETA: Record<'timia' | 'bbva' | 'mixto', string> = {
@@ -537,8 +522,7 @@ export type ActivityAssignees = Record<string, string[]>;
 // key: `${projectId}__${entregableId}__${actIdx}`, value: array de user IDs
 
 /** Configuración completa del plan de trabajo para un proyecto (generado desde Estimaciones) */
-export interface PlanActivityConfig {
-  label: string;
+export interface PlanActivityConfig extends PlanActivityStructure {
   startWeek: number;
   endWeek: number;
   /**
@@ -546,16 +530,6 @@ export interface PlanActivityConfig {
    * discontinuos (ej. [1,2,3,4,18,19]). Si no está, se deriva del rango startWeek→endWeek.
    */
   weeks?: number[];
-  /** @deprecated usar `resp`. Se mantiene por compatibilidad con los planes existentes. */
-  bbva?: boolean;
-  /**
-   * Quién ejecuta: 'timia' (horas nuestras), 'bbva' (espera del banco, no son horas
-   * nuestras) o 'mixto' (lo hace Timia pero no cierra sin VoBo de negocio).
-   */
-  resp?: 'timia' | 'bbva' | 'mixto';
-  /** Fase del SDA con la que se imputa en el Activity Report. */
-  faseSDA?: string;
-  etapas?: PlanEtapa[];
 }
 
 /** Responsable efectivo de una actividad, con el campo viejo `bbva` como respaldo. */
@@ -563,11 +537,7 @@ export function respDe(a: Pick<PlanActivityConfig, 'resp' | 'bbva'>): 'timia' | 
   return a.resp ?? (a.bbva ? 'bbva' : 'timia');
 }
 
-export interface PlanEntregableConfig {
-  id: string;
-  label: string;
-  activities: PlanActivityConfig[];
-}
+export interface PlanEntregableConfig extends PlanEntregableStructure<PlanActivityConfig> {}
 
 /**
  * Plantilla de cronograma creada por el usuario desde Estimaciones.
@@ -755,7 +725,8 @@ export async function seedFromRemote(): Promise<void> {
       if (key.startsWith('_')) return;                // _version, _note → ignorar
       if (SEED_SKIP_KEYS.has(key)) return;            // auth y nav → no tocar
       if (key.startsWith('timia_')) {
-        try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+        try { localStorage.setItem(key, JSON.stringify(key === PLAN_CONFIGS_KEY ? conservarEstructurasLocales(val) : val)); }
+        catch (error) { console.error(`No se pudo cargar ${key} desde la semilla.`, error); }
       }
     });
   } catch {
@@ -850,7 +821,7 @@ export const adminStore = {
   saveActivityJiras: (j: Record<string, string>)     => save('activity_jiras', j),
 
   // Configuración de planes generados desde Estimaciones (keyed by planKey)
-  getPlanConfigs:  (): Record<string, PlanConfig>   => load('plan_configs', {}),
+  getPlanConfigs:  (): Record<string, PlanConfig>   => soloCronogramas(load<Record<string, PlanConfig>>('plan_configs', {})),
 
   // ── Plantillas propias de cronograma (proyecto y entregable) ──────────────
   // Se guardan aparte del catálogo de fábrica, que vive en lib/plantillas.ts.
@@ -859,19 +830,19 @@ export const adminStore = {
   getSolicitudesPlantilla: (): SolicitudPlantilla[] => load('plantilla_solicitudes', [] as SolicitudPlantilla[]),
   saveSolicitudesPlantilla: (s: SolicitudPlantilla[]) => save('plantilla_solicitudes', s),
 
-  savePlanConfigs: (c: Record<string, PlanConfig>)  => save('plan_configs', c),
+  savePlanConfigs: (c: Record<string, PlanConfig>)  => save('plan_configs', conservarEstructurasLocales(c)),
   getPlanConfig:   (planKey: string): PlanConfig | null => {
-    const all = load<Record<string, PlanConfig>>('plan_configs', {});
+    const all = adminStore.getPlanConfigs();
     return all[planKey] ?? null;
   },
   savePlanConfig: (planKey: string, config: PlanConfig) => {
-    const all = load<Record<string, PlanConfig>>('plan_configs', {});
+    const all = adminStore.getPlanConfigs();
     all[planKey] = config;
-    save('plan_configs', all);
+    adminStore.savePlanConfigs(all);
   },
   /** Cronogramas configurados para un proyecto (principal primero). */
   getProjectCronogramas: (projectId: string): { planKey: string; cronoId?: string; name: string; cfg: PlanConfig }[] => {
-    const all = load<Record<string, PlanConfig>>('plan_configs', {});
+    const all = adminStore.getPlanConfigs();
     return Object.entries(all)
       .filter(([, c]) => c.projectId === projectId)
       .map(([planKey, cfg]) => ({ planKey, cronoId: cfg.cronoId, name: cfg.cronoId ? (cfg.cronoName ?? cfg.cronoId) : CRONO_MAIN_NAME, cfg }))
