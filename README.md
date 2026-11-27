@@ -18,3 +18,17 @@ View your app in AI Studio: https://ai.studio/apps/17df0b3a-76d2-449b-b2ca-ce2b6
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Detalle de proyectos abiertos (T&M)
+
+Desde Dashboard, al entrar a un proyecto abierto se muestran entregables,
+actividades y etapas en paneles desplegables. Es posible agregarlos y editar sus
+nombres y los pesos de etapas como una simulación visual: estos cambios viven
+solo en la pantalla y se descartan al salir, cambiar de proyecto o recargar.
+No se envían a la API ni modifican el cronograma de proyectos cerrados.
+
+La acción **Actualizar avance** de las tareas existentes mantiene el guardado
+real de porcentaje, estado, responsable e historial. Los pesos simulados no
+recalculan ese avance. Las actividades nuevas no se guardan como tareas.
+
+Comprobación enfocada: `npm run verif:tym`.

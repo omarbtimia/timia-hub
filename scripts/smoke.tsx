@@ -19,7 +19,7 @@ for (const [k,v] of Object.entries(db)) if (k.startsWith('timia_')) w.localStora
 w.localStorage.setItem('timia_notes_MIGBD', JSON.stringify({ pasos:['x'] }));
 w.localStorage.setItem('timia_notes_OTRO', 'garbage{');
 // Un proyecto abierto con tareas, para que la vista T&M se monte con contenido
-// y el click en la fila abra el panel de avance.
+// y la acción de seguimiento abra el panel de avance.
 w.localStorage.setItem('timia_tym_planes', JSON.stringify({ MIGBD: {
   projectId: 'MIGBD', bloques: ['Incidencias'],
   tareas: [
@@ -112,6 +112,10 @@ let failed = false;
         await act(async () => { root.render(React.createElement(auth.AuthProvider, null, React.createElement(C, props))); });
         for (const p of ['FICO','CRONOS','NGA','FICO','General','Ver cronogramas en el tiempo','Input','FICO 2.0','Randómico','Principal','+ Bloqueante','+ Seleccionar tareas','Confirmar','+ Alerta','+ Seleccionar tareas','Cancelar','+ Cronograma','Nuevo cambio','Cargar TR','Features y horas','Nueva feature','Cumplimiento','Validación','Generar standup','Correos','Links importantes','Horas del anexo']) await click(p);
         const row = el.querySelector('tbody tr'); if (row) await act(async () => { row.dispatchEvent(new w.MouseEvent('click', { bubbles: true })); });
+        if (name === 'TymProy') {
+          await click('Actualizar avance');
+          if (!el.querySelector('[role="dialog"]')) errors.push('falta panel de avance en TymProy');
+        }
         // Que la vista monte no basta: lo que se agregó tiene que estar ahí.
         const debe: Record<string, string[]> = {
           Plan: ['Correos', 'Links importantes', 'Alertas y bloqueantes', 'Aprobación del diccionario'],
