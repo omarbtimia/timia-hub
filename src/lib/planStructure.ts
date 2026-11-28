@@ -46,17 +46,19 @@ export function estructuraValida(value: unknown): value is PlanStructure {
   const ids = new Set<string>();
   const responsableValido = (nodo: Record<string, unknown>) =>
     nodo.responsableId === undefined || (typeof nodo.responsableId === 'string' && nodo.responsableId.trim().length > 0);
+  const estadoValido = (nodo: Record<string, unknown>) =>
+    nodo.estado === undefined || ['backlog', 'in-progress', 'review', 'done'].includes(String(nodo.estado));
   const unico = (id: unknown) => {
     if (typeof id !== 'string' || !id || ids.has(id)) return false;
     ids.add(id);
     return true;
   };
   return value.entregables.every(ent =>
-    esObjeto(ent) && unico(ent.id) && responsableValido(ent) && typeof ent.label === 'string' && Array.isArray(ent.activities)
+    esObjeto(ent) && unico(ent.id) && responsableValido(ent) && estadoValido(ent) && typeof ent.label === 'string' && Array.isArray(ent.activities)
     && ent.activities.every(act =>
       esObjeto(act) && unico(act.id) && responsableValido(act) && typeof act.label === 'string'
       && (act.etapas === undefined || (Array.isArray(act.etapas) && act.etapas.every(et =>
-        esObjeto(et) && unico(et.id) && responsableValido(et) && typeof et.label === 'string'
+        esObjeto(et) && unico(et.id) && responsableValido(et) && estadoValido(et) && typeof et.label === 'string'
         && typeof et.peso === 'number' && Number.isInteger(et.peso) && et.peso >= 0 && et.peso <= 100
       )))
     )

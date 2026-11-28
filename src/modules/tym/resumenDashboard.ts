@@ -1,7 +1,7 @@
 import { adminStore, type AdminProject } from '../../lib/adminStore';
 import { esObjeto } from '../../lib/planStructure';
 import { effectiveRole } from '../../lib/permissions';
-import { leerEstructura } from './almacen';
+import { leerEstructura, normalizarPlan } from './almacen';
 import { ESTADOS, planVacio, type PlanTym } from './tipos';
 import {
   consultaAmpliadaTym, developersDelProyecto, estructuraConResponsables,
@@ -29,25 +29,11 @@ function planValidado(projectId: string): PlanTym {
   const guardado = mapa[projectId];
   if (guardado === undefined) return planVacio(projectId);
   if (!esObjeto(guardado)) throw new Error('El seguimiento del proyecto no es válido.');
-  const p = { ...planVacio(projectId), ...guardado };
-  if (!esPlan(p) || p.projectId !== projectId) {
+  const p = normalizarPlan({ ...planVacio(projectId), ...guardado });
+  if (p.projectId !== projectId) {
     throw new Error('Las tareas o el historial de este proyecto no tienen un formato válido.');
   }
   return p;
-}
-
-function esPlan(p: unknown): p is PlanTym {
-  return esObjeto(p) && typeof p.projectId === 'string' && Array.isArray(p.tareas)
-    && p.tareas.every(t => esObjeto(t) && typeof t.id === 'string' && typeof t.nombre === 'string'
-      && typeof t.bloque === 'string' && typeof t.pct === 'number' && t.pct >= 0 && t.pct <= 100
-      && typeof t.creada === 'string'
-      && ESTADOS.some(e => e.id === t.estado) && (t.responsable === undefined || typeof t.responsable === 'string'))
-    && new Set(p.tareas.map(t => t.id)).size === p.tareas.length
-    && Array.isArray(p.bloques) && p.bloques.every(b => typeof b === 'string')
-    && esObjeto(p.historial) && Object.values(p.historial).every(h =>
-      Array.isArray(h) && h.every(c => esObjeto(c) && typeof c.fecha === 'string'
-        && typeof c.de === 'number' && typeof c.a === 'number' && typeof c.quien === 'string'
-        && (c.nota === undefined || typeof c.nota === 'string')));
 }
 
 /** Un filtro global nunca amplia el permiso de una tarjeta de otro proyecto. */

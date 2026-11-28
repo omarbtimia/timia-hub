@@ -32,9 +32,9 @@ w.localStorage.setItem('timia_admin_projects', JSON.stringify([
 const original: PlanTym = {
   projectId: 'DEMO', bloques: ['Compartido', 'Vacío'],
   tareas: [
-    { id: 'a1', nombre: 'Trabajo Ana', bloque: 'Compartido', responsable: 'Ana', pct: 25, estado: 'en-curso', creada: '2026-01-01' },
-    { id: 'b1', nombre: 'Trabajo Bob', bloque: 'Compartido', responsable: 'Bob', pct: 60, estado: 'en-curso', creada: '2026-01-01' },
-    { id: 'u1', nombre: 'Tarea sin asignar', bloque: 'General', pct: 100, estado: 'finalizada', creada: '2026-01-01' },
+    { id: 'a1', nombre: 'Trabajo Ana', bloque: 'Compartido', responsable: 'Ana', pct: 25, estado: 'in-progress', creada: '2026-01-01' },
+    { id: 'b1', nombre: 'Trabajo Bob', bloque: 'Compartido', responsable: 'Bob', pct: 60, estado: 'in-progress', creada: '2026-01-01' },
+    { id: 'u1', nombre: 'Tarea sin asignar', bloque: 'General', pct: 100, estado: 'done', creada: '2026-01-01' },
   ],
   historial: {
     a1: [{ fecha: '2026-01-02', de: 0, a: 25, quien: 'Demo' }],
@@ -65,6 +65,8 @@ let sesion: AdminUser | null = pm;
 const requests: { url: string; method: string; body: unknown }[] = [];
 let remoteConfigs: Record<string, unknown> = { CERRADO: closed };
 let denyNextWrite = false;
+let denyNextKanban = false;
+let remoteCards: unknown[] = [];
 const previousFetch = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   const url = String(input);
@@ -81,6 +83,15 @@ globalThis.fetch = async (input, init) => {
     return Response.json({ ok: true });
   }
   if (url.endsWith('/api/state/timia_role_permissions') && init?.method === 'PUT') return Response.json({ ok: true });
+  if (url.endsWith('/api/state/timia_kanban_tasks')) {
+    if (init?.method !== 'PUT') return Response.json(remoteCards);
+    if (denyNextKanban) {
+      denyNextKanban = false;
+      return Response.json({ detail: 'Prueba de permisos Kanban' }, { status: 403 });
+    }
+    remoteCards = JSON.parse(String(init.body)).value;
+    return Response.json({ ok: true });
+  }
   assert.equal(init?.method, 'PUT', `Solicitud inesperada: ${url}`);
   assert.ok(url.endsWith('/api/state/timia_tym_planes'), `Clave inesperada: ${url}`);
   return Response.json({ ok: true });
@@ -97,6 +108,7 @@ const { developersDelProyecto, estructuraConResponsables } = await import('../sr
 const { currentMatrix, saveMatrix } = await import('../src/lib/permissions');
 const ProyectoTym = (await import('../src/modules/tym/ProyectoTym')).default;
 const CrearTareas = (await import('../src/modules/tym/CrearTareas')).default;
+const KanbanBoard = (await import('../src/components/KanbanBoard')).default;
 await probeApi();
 assert.equal(persist.mode, 'api');
 requests.length = 0;
@@ -123,6 +135,15 @@ async function click(label: string, scope: ParentNode = container) {
   const b = Array.from(scope.querySelectorAll('button')).find(b => b.getAttribute('aria-label') === label || b.textContent?.trim() === label);
   assert.ok(b, `Falta botón ${label}`);
   await act(async () => { b.dispatchEvent(new w.MouseEvent('click', { bubbles: true })); });
+  if (label.startsWith('Agregar ')) {
+    const estado = container.querySelector<HTMLSelectElement>('select[aria-label="Estado del nuevo elemento"]');
+    if (estado) {
+      assert.equal(estado.value, '', 'El estado no se preselecciona');
+      assert.equal(container.querySelector<HTMLButtonElement>('[role="dialog"] button[type="submit"]')?.disabled, true);
+      await change(estado, 'backlog');
+      await act(async () => { container.querySelector('form')!.dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true })); });
+    }
+  }
 }
 async function change(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, value: string) {
   const prototype = el.tagName === 'SELECT' ? w.HTMLSelectElement.prototype
@@ -208,7 +229,7 @@ try {
   requests.length = 0;
   await change(input('Nombre de la etapa 1.1.1'), 'Etapa propia editada');
   await waitWrites();
-  assert.equal(requests.length, 0, 'Editar solo estructura no produce PUT');
+  assert.ok(requests.every(r => r.url.endsWith('timia_kanban_tasks')), 'Renombrar estructura solo sincroniza su tarjeta, no envía la jerarquía');
   const current = snapshot();
   await report();
   await change(select('Visualizar trabajo de'), 'bob');
@@ -257,7 +278,7 @@ try {
   assert.equal(stored().entregables.at(-1)!.activities[0].etapas![0].responsableId, 'ana');
   assert.equal(input('Peso de la etapa 4.1.1').value, '100');
   assert.deepEqual(Object.keys(stored()).sort(), ['entregables', 'projectId']);
-  assert.deepEqual(Object.keys(stored().entregables.at(-1)!).sort(), ['activities', 'id', 'label', 'responsableId']);
+  assert.deepEqual(Object.keys(stored().entregables.at(-1)!).sort(), ['activities', 'estado', 'id', 'label', 'responsableId']);
   assert.deepEqual(Object.keys(actNueva).sort(), ['etapas', 'id', 'label', 'responsableId']);
   assert.equal(JSON.stringify(stored()).includes('startWeek'), false);
   assert.equal(JSON.stringify(stored()).includes('tareaId'), false);
@@ -294,7 +315,7 @@ try {
   assert.equal(tracking().tareas.find(t => t.id === 'b1')?.responsable, 'Ana');
   assert.equal(container.querySelector('section[aria-label="Actividad 1.1"]'), null);
   await waitWrites();
-  assert.ok(requests.every(r => r.url.endsWith('timia_tym_planes')));
+  assert.ok(requests.every(r => r.url.endsWith('timia_tym_planes') || r.url.endsWith('timia_kanban_tasks')));
   requests.length = 0;
   console.log('OK: LT por developer, inicialización de seguimiento local y reasignación sin perder contexto');
 
@@ -328,7 +349,7 @@ try {
   assert.deepEqual(closed, originalClosed);
   const realActual = leerPlan('DEMO');
   w.localStorage.setItem('timia_tym_planes', JSON.stringify({ DEMO: {
-    ...realActual, tareas: [...realActual.tareas, { id: 'posterior', nombre: 'Agregada después', bloque: 'General', pct: 0, estado: 'en-curso', creada: '2026-01-01' }],
+    ...realActual, tareas: [...realActual.tareas, { id: 'posterior', nombre: 'Agregada después', bloque: 'General', pct: 0, estado: 'in-progress', creada: '2026-01-01' }],
   } }));
   const reconciliada = leerEstructura(leerPlan('DEMO'));
   assert.equal(reconciliada.entregables.flatMap(e => e.activities).filter(a => a.id === 'posterior').length, 1);
@@ -486,6 +507,26 @@ try {
   assert.equal(container.querySelectorAll('section[aria-label^="Entregable "]').length, 0, 'LT restringido no salta filtro de consulta');
   await waitWrites();
   assert.equal(persist.pendingWrites, 0, 'No quedan escrituras pendientes al finalizar');
+  await act(async () => { root.render(null); saveMatrix(matrix); });
+  await waitWrites();
+  const planAntesDeRechazo = leerPlan('DEMO');
+  w.localStorage.setItem('timia_tym_planes', JSON.stringify({ DEMO: {
+    ...planAntesDeRechazo, tareas: planAntesDeRechazo.tareas.map((t, i) => i ? t : { ...t, estado: t.estado === 'review' ? 'backlog' : 'review' }),
+  } }));
+  requests.length = 0;
+  denyNextKanban = true;
+  sesion = ana;
+  await act(async () => { root.render(<AuthProvider><KanbanBoard userRole="developer" setUserRole={() => {}}/></AuthProvider>); });
+  await waitWrites();
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 700)); });
+  assert.equal(requests.filter(r => r.url.endsWith('timia_kanban_tasks') && r.method === 'PUT').length, 1, 'Rechazo 403 no inicia un bucle de reconciliación/escrituras');
+  assert.equal(persist.lastError?.key, 'timia_kanban_tasks');
+  assert.equal(persist.pendingWrites, 0);
+  for (const r of requests.filter(r => r.url.endsWith('timia_kanban_tasks') && r.method === 'PUT')) {
+    const payload = JSON.parse(String(r.body)).value;
+    assert.ok(payload.every((t: Record<string, unknown>) => !('entregables' in t) && !('activities' in t) && !('etapas' in t)));
+  }
+  await act(async () => { persist.clearError(); });
   assert.equal(errors.length, 0, 'Sin errores React');
   console.log('OK: LT reasigna tres niveles en panorama, consulta developer sin edición, matriz API y revocacion inmediata');
   console.log('OK: sesiones sin acceso, proyectos inexistentes y usuario sin elementos');

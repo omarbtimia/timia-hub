@@ -8,22 +8,38 @@
 // pero se guarda localmente y no incorpora semanas ni fechas de planificación.
 
 import type { PlanActivityStructure, PlanEntregableStructure, PlanEtapa } from '../../lib/planStructure';
+import { ESTADOS_KANBAN, type KanbanStatus } from '../../lib/adminStore';
 
-export interface EtapaTym extends PlanEtapa { responsableId?: string }
+export interface EtapaTym extends PlanEtapa { responsableId?: string; estado?: KanbanStatus }
 export interface ActividadTym extends PlanActivityStructure {
   responsableId?: string;
   etapas?: EtapaTym[];
 }
-export interface EntregableTym extends PlanEntregableStructure<ActividadTym> { responsableId?: string }
+export interface EntregableTym extends PlanEntregableStructure<ActividadTym> { responsableId?: string; estado?: KanbanStatus }
 export interface EstructuraTym { projectId: string; entregables: EntregableTym[] }
 
-export type EstadoTarea = 'en-curso' | 'en-espera' | 'finalizada' | 'no-se-requiere';
+export type EstadoTarea = KanbanStatus;
+
+export function esEstado(value: unknown): value is EstadoTarea {
+  return ESTADOS_KANBAN.some(e => e === value);
+}
+
+export function migrarEstado(value: unknown): EstadoTarea {
+  if (esEstado(value)) return value;
+  switch (value) {
+    case 'en-curso': return 'in-progress';
+    case 'finalizada': return 'done';
+    case 'en-espera':
+    case 'no-se-requiere': return 'backlog';
+    default: throw new Error(`Estado T&M no válido: ${String(value)}`);
+  }
+}
 
 export const ESTADOS: { id: EstadoTarea; label: string; fondo: string; texto: string; borde: string }[] = [
-  { id: 'en-curso',       label: 'En curso',       fondo: '#eff6ff', texto: '#1e40af', borde: '#bfdbfe' },
-  { id: 'en-espera',      label: 'En espera',      fondo: '#fffbeb', texto: '#92400e', borde: '#fde68a' },
-  { id: 'finalizada',     label: 'Finalizada',     fondo: '#ecfdf5', texto: '#065f46', borde: '#a7f3d0' },
-  { id: 'no-se-requiere', label: 'No se requiere', fondo: '#f1f5f9', texto: '#475569', borde: '#cbd5e1' },
+  { id: 'backlog',     label: 'Backlog',     fondo: '#f1f5f9', texto: '#475569', borde: '#cbd5e1' },
+  { id: 'in-progress', label: 'En Progreso', fondo: '#eff6ff', texto: '#1e40af', borde: '#bfdbfe' },
+  { id: 'review',      label: 'Revisión',    fondo: '#fffbeb', texto: '#92400e', borde: '#fde68a' },
+  { id: 'done',        label: 'Finalizado',  fondo: '#ecfdf5', texto: '#065f46', borde: '#a7f3d0' },
 ];
 
 export const estadoDe = (id: EstadoTarea) => ESTADOS.find(e => e.id === id) ?? ESTADOS[0];
@@ -61,13 +77,13 @@ export const planVacio = (projectId: string): PlanTym =>
 
 /** El avance del proyecto: promedio simple, que es lo que pesa igual cada tarea. */
 export function avanceDe(plan: PlanTym): number {
-  const cuentan = plan.tareas.filter(t => t.estado !== 'no-se-requiere');
+  const cuentan = plan.tareas;
   if (!cuentan.length) return 0;
   return parseFloat((cuentan.reduce((s, t) => s + t.pct, 0) / cuentan.length).toFixed(1));
 }
 
 /** Cuántas están cerradas y cuántas cuentan, para la pastilla de la cabecera. */
 export function cerradasDe(plan: PlanTym): { hechas: number; total: number } {
-  const cuentan = plan.tareas.filter(t => t.estado !== 'no-se-requiere');
-  return { hechas: cuentan.filter(t => t.estado === 'finalizada' || t.pct >= 100).length, total: cuentan.length };
+  const cuentan = plan.tareas;
+  return { hechas: cuentan.filter(t => t.estado === 'done' || t.pct >= 100).length, total: cuentan.length };
 }

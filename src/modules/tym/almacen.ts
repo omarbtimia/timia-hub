@@ -8,8 +8,8 @@
 
 import { persistSet } from '../../lib/persist';
 import { adminStore, type AdminProject } from '../../lib/adminStore';
-import { planVacio, type PlanTym, type TareaTym, type CambioTym, type EstructuraTym, type EntregableTym } from './tipos';
-import { esEstructuraLocal, estructuraValida, leerConfiguraciones, PLAN_CONFIGS_KEY } from '../../lib/planStructure';
+import { migrarEstado, planVacio, type EstadoTarea, type PlanTym, type TareaTym, type CambioTym, type EstructuraTym, type EntregableTym } from './tipos';
+import { esObjeto, esEstructuraLocal, estructuraValida, leerConfiguraciones, PLAN_CONFIGS_KEY } from '../../lib/planStructure';
 
 export function leerEstructura(plan: PlanTym): EstructuraTym {
   const cfg = leerConfiguraciones()[plan.projectId];
@@ -32,6 +32,11 @@ export function leerEstructura(plan: PlanTym): EstructuraTym {
       id: t.id, label: t.nombre, etapas: [],
     })));
   }
+  estructura.entregables = estructura.entregables.map(e => ({
+    ...e, estado: e.estado ?? 'backlog', activities: e.activities.map(a => ({
+      ...a, etapas: a.etapas?.map(et => ({ ...et, estado: et.estado ?? 'backlog' })),
+    })),
+  }));
   return estructura;
 }
 
@@ -48,27 +53,60 @@ export function guardarEstructura(projectId: string, entregables: EntregableTym[
 
 const CLAVE = 'timia_tym_planes';
 
-type Mapa = Record<string, PlanTym>;
+function todos(): Record<string, unknown> {
+  const v: unknown = JSON.parse(localStorage.getItem(CLAVE) ?? '{}');
+  if (!esObjeto(v)) throw new Error('El seguimiento guardado no es válido.');
+  return v;
+}
 
-function todos(): Mapa {
-  try {
-    const v = localStorage.getItem(CLAVE);
-    return v ? (JSON.parse(v) as Mapa) : {};
-  } catch { return {}; }
+export function normalizarPlan(plan: unknown): PlanTym {
+  if (!esObjeto(plan) || typeof plan.projectId !== 'string'
+    || !Array.isArray(plan.bloques) || !plan.bloques.every(b => typeof b === 'string')
+    || !Array.isArray(plan.tareas) || !esObjeto(plan.historial)) {
+    throw new Error('El seguimiento guardado no tiene un formato válido.');
+  }
+  const tareas: TareaTym[] = plan.tareas.map(t => {
+    if (!esObjeto(t) || typeof t.id !== 'string' || !t.id || typeof t.nombre !== 'string'
+      || typeof t.bloque !== 'string' || typeof t.pct !== 'number' || !Number.isFinite(t.pct) || t.pct < 0 || t.pct > 100
+      || typeof t.creada !== 'string' || (t.responsable !== undefined && typeof t.responsable !== 'string')) {
+      throw new Error('Las tareas guardadas no tienen un formato válido.');
+    }
+    const { responsable, ...resto } = t;
+    return { ...resto, id: t.id, nombre: t.nombre, bloque: t.bloque, pct: t.pct, creada: t.creada,
+      ...(typeof responsable === 'string' ? { responsable } : {}), estado: migrarEstado(t.estado) };
+  });
+  if (new Set(tareas.map(t => t.id)).size !== tareas.length) throw new Error('Hay tareas con identificadores duplicados.');
+  const historial: Record<string, CambioTym[]> = {};
+  for (const [id, cambios] of Object.entries(plan.historial)) {
+    if (!Array.isArray(cambios)) throw new Error('El historial guardado no tiene un formato válido.');
+    historial[id] = cambios.map(c => {
+      if (!esObjeto(c) || typeof c.fecha !== 'string' || typeof c.de !== 'number' || !Number.isFinite(c.de)
+        || typeof c.a !== 'number' || !Number.isFinite(c.a) || typeof c.quien !== 'string'
+        || (c.nota !== undefined && typeof c.nota !== 'string')) {
+        throw new Error('Los movimientos guardados no tienen un formato válido.');
+      }
+      const { nota, ...resto } = c;
+      return { ...resto, fecha: c.fecha, de: c.de, a: c.a, quien: c.quien, ...(typeof nota === 'string' ? { nota } : {}) };
+    });
+  }
+  return { ...plan, projectId: plan.projectId, bloques: plan.bloques, tareas, historial };
 }
 
 export function leerPlan(projectId: string): PlanTym {
   const p = todos()[projectId];
-  if (!p) return planVacio(projectId);
+  if (p === undefined) return planVacio(projectId);
+  if (!esObjeto(p) || (p.projectId !== undefined && p.projectId !== projectId)) {
+    throw new Error('El seguimiento guardado no corresponde a este proyecto.');
+  }
   // Los campos nuevos pueden faltar en lo ya guardado.
-  return { ...planVacio(projectId), ...p, projectId };
+  return normalizarPlan({ ...planVacio(projectId), ...p, projectId });
 }
 
 export function guardarPlan(plan: PlanTym): void {
   const raw = localStorage.getItem(CLAVE);
   const all: unknown = raw === null ? {} : JSON.parse(raw);
   if (!all || typeof all !== 'object' || Array.isArray(all)) throw new Error('El seguimiento guardado no es válido.');
-  const siguiente = { ...all, [plan.projectId]: plan };
+  const siguiente = { ...all, [plan.projectId]: normalizarPlan(plan) };
   // persistSet oculta errores de cuota en otras claves; aqui deben poder reintentarse.
   localStorage.setItem(CLAVE, JSON.stringify(siguiente));
   persistSet(CLAVE, siguiente);
@@ -86,13 +124,13 @@ export function esTym(proyecto: AdminProject | string | undefined): boolean {
 export const nuevoId = () =>
   `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
-export function nuevaTarea(nombre: string, bloque: string, responsable?: string): TareaTym {
+export function nuevaTarea(nombre: string, bloque: string, responsable?: string, estado: EstadoTarea = 'backlog'): TareaTym {
   return {
     id: nuevoId(),
     nombre: nombre.trim(),
     bloque: bloque.trim(),
     responsable: responsable?.trim() || undefined,
-    estado: 'en-curso',
+    estado,
     pct: 0,
     creada: new Date().toISOString(),
   };

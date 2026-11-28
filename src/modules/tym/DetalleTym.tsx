@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { CheckSquare, ChevronDown, ChevronRight, Info, LayoutList, Plus, Settings2 } from 'lucide-react';
 import { guardarEstructura, leerEstructura, nuevoId, nuevaTarea, conAvance } from './almacen';
-import { estadoDe, type PlanTym, type EntregableTym, type ActividadTym, type EstadoTarea } from './tipos';
+import { ESTADOS, esEstado, estadoDe, type PlanTym, type EntregableTym, type ActividadTym, type EstadoTarea } from './tipos';
 import type { AdminUser } from '../../lib/adminStore';
 import { estructuraConResponsables, filtrarEntregables, esLiderTym, type UsuarioTym } from './responsables';
 import PanelAvance from './PanelAvance';
+import { avisarCambioTym, CAMBIO_TYM, sincronizarTableroTym } from './tablero';
 
 const mensajeError = (error: unknown) => error instanceof Error ? error.message : 'No se pudo acceder al almacenamiento de este navegador.';
 
@@ -39,9 +40,10 @@ interface Props {
   personal: boolean;
   usuario: UsuarioTym;
   onPendiente: (pendiente: boolean) => void;
+  bloqueado?: boolean;
 }
 
-export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, personal, usuario, onPendiente }: Props) {
+export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, personal, usuario, onPendiente, bloqueado = false }: Props) {
   const [pestana, setPestana] = useState<typeof PESTANAS[number]['id']>('activas');
   const soloLectura = pestana === 'historico';
   const panorama = personaId === null;
@@ -54,9 +56,29 @@ export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, per
   const [guardado, setGuardado] = useState(false);
   const [pendiente, setPendiente] = useState<PlanTym | null>(null);
   const [abierta, setAbierta] = useState<string | null>(null);
+  const [creacion, setCreacion] = useState<{
+    tipo: 'entregable' | 'actividad' | 'etapa'; entId?: string; actId?: string;
+    nombre: string; estado: string; responsableId: string; peso: number;
+  } | null>(null);
+  const [errorCreacion, setErrorCreacion] = useState('');
   const planActual = pendiente ?? plan;
   useEffect(() => { onPendiente(!!errorGuardado && !inicial.error); }, [errorGuardado, inicial.error, onPendiente]);
-  useEffect(() => { setAbierta(null); }, [personaId, pestana]);
+  useEffect(() => { setAbierta(null); setCreacion(null); }, [personaId, pestana, bloqueado]);
+  useEffect(() => {
+    function actualizar() {
+      if (pendiente || errorGuardado) return;
+      try {
+        const siguientes = estructuraConResponsables(leerEstructura(plan).entregables, plan, equipo);
+        setEntregables(actual => JSON.stringify(actual) === JSON.stringify(siguientes) ? actual : siguientes);
+      } catch (error) { setErrorGuardado(mensajeError(error)); }
+    }
+    window.addEventListener(CAMBIO_TYM, actualizar);
+    window.addEventListener('storage', actualizar);
+    return () => {
+      window.removeEventListener(CAMBIO_TYM, actualizar);
+      window.removeEventListener('storage', actualizar);
+    };
+  }, [plan, equipo, pendiente, errorGuardado]);
   const [abiertos, setAbiertos] = useState<Set<string>>(() => new Set(entregables.slice(0, 1).map(e => e.id)));
   const visibles = filtrarEntregables(entregables, personaId);
   const actividades = visibles.flatMap(e => e.activities);
@@ -64,15 +86,15 @@ export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, per
   const persona = equipo.find(u => u.id === personaId);
   const lider = esLiderTym(usuario, plan.projectId);
   const editable = (nodo: { responsableId?: string }) =>
-    !soloLectura && !inicial.error && !!persona && nodo.responsableId === personaId
+    !bloqueado && !soloLectura && !inicial.error && !!persona && nodo.responsableId === personaId
     && (!personal || nodo.responsableId === usuario.id);
-  const puedeCrear = !soloLectura && !inicial.error && !!persona && (!personal || personaId === usuario.id);
+  const puedeCrear = !bloqueado && !soloLectura && !inicial.error && !!persona && (!personal || personaId === usuario.id);
   const sinAsignar = (nodo: { responsableId?: string }) => !equipo.some(u => u.id === nodo.responsableId);
   const puedeAsignar = (nodo: { responsableId?: string }) =>
-    !soloLectura && !inicial.error && (lider || editable(nodo) || (!personal && panorama && sinAsignar(nodo)));
+    !bloqueado && !soloLectura && !inicial.error && (lider || editable(nodo) || (!personal && panorama && sinAsignar(nodo)));
 
   function aplicar(siguiente: EntregableTym[], seguimiento = planActual): boolean {
-    if (inicial.error) return false;
+    if (inicial.error || bloqueado) return false;
     const tareas = seguimiento.tareas.map(t => {
       const ent = siguiente.find(e => e.activities.some(a => a.id === t.id));
       const act = ent?.activities.find(a => a.id === t.id);
@@ -93,9 +115,11 @@ export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, per
     try {
       guardarEstructura(plan.projectId, siguiente);
       if (JSON.stringify(nuevoPlan) !== JSON.stringify(plan)) onGuardarPlan(nuevoPlan);
+      sincronizarTableroTym(nuevoPlan, siguiente);
       setPendiente(null);
       setErrorGuardado('');
       setGuardado(true);
+      avisarCambioTym();
       return true;
     } catch (error) {
       setErrorGuardado(mensajeError(error));
@@ -124,31 +148,72 @@ export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, per
 
   function agregarEntregable() {
     if (!puedeCrear) return;
-    const nuevo: EntregableTym = { id: nuevoId(), label: 'Nuevo entregable', responsableId: personaId!, activities: [] };
-    aplicar([...entregables, nuevo]);
-    abrir(nuevo.id);
+    setErrorCreacion('');
+    setCreacion({ tipo: 'entregable', nombre: 'Nuevo entregable', estado: '', responsableId: personaId!, peso: 0 });
   }
 
   function agregarActividad(entId: string) {
     if (!puedeCrear || !visibles.some(e => e.id === entId)) return;
-    const id = nuevoId();
-    const nueva: ActividadTym = { id, label: 'Nueva actividad', responsableId: personaId!, etapas: [] };
-    const ent = entregables.find(e => e.id === entId)!;
-    const tarea = { ...nuevaTarea(nueva.label, ent.label, persona!.name), id };
-    aplicar(entregables.map(e => e.id === entId ? { ...e, activities: [...e.activities, nueva] } : e),
-      { ...planActual, tareas: [...planActual.tareas, tarea] });
-    setAbiertos(actual => new Set([...actual, entId, id]));
+    setErrorCreacion('');
+    setCreacion({ tipo: 'actividad', entId, nombre: 'Nueva actividad', estado: '', responsableId: personaId!, peso: 0 });
   }
 
   function agregarEtapa(entId: string, actId: string) {
     if (!puedeCrear || !visibles.some(e => e.id === entId && e.activities.some(a => a.id === actId))) return;
+    const act = entregables.find(e => e.id === entId)!.activities.find(a => a.id === actId)!;
+    setErrorCreacion('');
+    setCreacion({ tipo: 'etapa', entId, actId, nombre: 'Nueva etapa', estado: '', responsableId: personaId!,
+      peso: Math.max(0, 100 - (act.etapas ?? []).reduce((s, et) => s + et.peso, 0)) });
+  }
+
+  function crearElemento(ev: React.FormEvent) {
+    ev.preventDefault();
+    if (!creacion || !puedeCrear || pendiente) return;
+    const asignado = equipo.find(u => u.id === creacion.responsableId && (!personal || u.id === usuario.id));
+    if (!creacion.nombre.trim() || !esEstado(creacion.estado) || !asignado
+      || !Number.isInteger(creacion.peso) || creacion.peso < 0 || creacion.peso > 100) {
+      setErrorCreacion('Selecciona nombre, estado, responsable y peso válidos.');
+      return;
+    }
     const id = nuevoId();
-    cambiarActividad(entId, actId, a => ({
-      ...a, etapas: [...(a.etapas ?? []), {
-        id, label: 'Nueva etapa', responsableId: personaId!, peso: Math.max(0, 100 - (a.etapas ?? []).reduce((s, et) => s + et.peso, 0)),
-      }],
-    }));
-    abrir(actId);
+    const comun = { id, label: creacion.nombre.trim(), responsableId: asignado.id };
+    if (creacion.tipo === 'entregable') {
+      aplicar([...entregables, { ...comun, estado: creacion.estado, activities: [] }]);
+      abrir(id);
+    } else {
+      const ent = entregables.find(e => e.id === creacion.entId);
+      if (!ent || !visibles.some(e => e.id === ent.id)) {
+        setErrorCreacion('El entregable ya no está disponible en esta vista.'); return;
+      }
+      if (creacion.tipo === 'actividad') {
+        const tarea = { ...nuevaTarea(comun.label, ent.label, asignado.name, creacion.estado), id };
+        aplicar(entregables.map(e => e.id === ent.id ? { ...e, activities: [...e.activities, { ...comun, etapas: [] }] } : e),
+          { ...planActual, tareas: [...planActual.tareas, tarea] });
+        setAbiertos(actual => new Set([...actual, ent.id, id]));
+      } else {
+        if (!visibles.some(e => e.activities.some(a => a.id === creacion.actId))) {
+          setErrorCreacion('La actividad ya no está disponible en esta vista.'); return;
+        }
+        const etapa = { ...comun, estado: creacion.estado, peso: creacion.peso };
+        cambiarActividad(ent.id, creacion.actId!, a => ({ ...a, etapas: [...(a.etapas ?? []), etapa] }));
+        abrir(creacion.actId!);
+      }
+    }
+    setCreacion(null);
+  }
+
+  function selectorEstado(nodo: { responsableId?: string }, valor: EstadoTarea, label: string, guardar: (estado: EstadoTarea) => void) {
+    if (!editable(nodo)) {
+      const estado = estadoDe(valor);
+      return <span style={{ ...badge, background: estado.fondo, color: estado.texto }}>{estado.label}</span>;
+    }
+    return <label style={{ fontSize: 11, color: '#64748b' }}>Estado{' '}
+      <select aria-label={`Estado ${label}`} value={valor} disabled={!!pendiente}
+        onChange={ev => { if (editable(nodo) && esEstado(ev.target.value)) guardar(ev.target.value); }}
+        style={{ ...campo, minHeight: 36 }}>
+        {ESTADOS.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+      </select>
+    </label>;
   }
 
   function responsable(nodo: { responsableId?: string }, label: string, asignar: (id: string) => void) {
@@ -176,7 +241,7 @@ export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, per
   const tareaAbierta = entAbierto && actAbierta && editable(actAbierta) ? tareaPara(actAbierta, entAbierto) : null;
 
   function guardarAvance(cambios: { pct: number; estado: EstadoTarea; responsable?: string; responsableId?: string }, nota: string) {
-    if (!actAbierta || !entAbierto || !tareaAbierta || !editable(actAbierta)) return;
+    if (!actAbierta || !entAbierto || !tareaAbierta || !editable(actAbierta) || !esEstado(cambios.estado)) return;
     const candidatos = equipo.filter(u => u.id === cambios.responsableId && (!personal || u.id === usuario.id));
     if (candidatos.length !== 1) {
       setErrorGuardado('Selecciona un developer válido del proyecto.');
@@ -285,6 +350,8 @@ export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, per
               style={{ ...campo, fontWeight: 600, color: '#9f1239' }}/>}
             {responsable(ent, `del entregable ${ei + 1}`, id =>
               aplicar(entregables.map(e => e.id === ent.id ? { ...e, responsableId: id } : e)))}
+            {selectorEstado(ent, ent.estado ?? 'backlog', `del entregable ${ei + 1}`, estado =>
+              aplicar(entregables.map(e => e.id === ent.id ? { ...e, estado } : e)))}
             {!panorama && !editable(ent) && !soloLectura && <span style={badge}>{lider ? 'Contexto · solo responsable editable' : 'Contexto · solo lectura'}</span>}
             <span style={badge}>{ent.activities.length} {ent.activities.length === 1 ? 'actividad' : 'actividades'}</span>
             {puedeCrear && <button type="button" onClick={() => agregarActividad(ent.id)} style={accion}><Plus size={13}/> Agregar actividad</button>}
@@ -294,7 +361,6 @@ export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, per
               {!ent.activities.length && <p style={{ margin: '8px 0', color: '#94a3b8', fontSize: 12 }}>{soloLectura ? 'Sin actividades.' : 'Sin actividades. Agrega una actividad a este entregable.'}</p>}
               {ent.activities.map((act, ai) => {
                 const tarea = planActual.tareas.find(t => t.id === act.id);
-                const estado = tarea ? estadoDe(tarea.estado) : null;
                 const etapasActividad = act.etapas ?? [];
                 const completa = entregables.find(e => e.id === ent.id)!.activities.find(a => a.id === act.id)!;
                 const total = (completa.etapas ?? []).reduce((s, et) => s + et.peso, 0);
@@ -309,12 +375,13 @@ export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, per
                         onChange={ev => { if (editable(act)) cambiarActividad(ent.id, act.id, a => ({ ...a, label: ev.target.value })); }} style={campo}/>}
                       {responsable(act, `de la actividad ${ei + 1}.${ai + 1}`, id =>
                         cambiarActividad(ent.id, act.id!, a => ({ ...a, responsableId: id })))}
+                      {selectorEstado(act, tarea?.estado ?? 'backlog', `de la actividad ${ei + 1}.${ai + 1}`, estado => {
+                        const base = tarea ? planActual : { ...planActual, tareas: [...planActual.tareas, tareaPara(act, ent)] };
+                        aplicar(entregables, { ...base, tareas: base.tareas.map(t => t.id === act.id ? { ...t, estado } : t) });
+                      })}
                       {!panorama && !editable(act) && !soloLectura && <span style={badge}>{lider ? 'Contexto · solo responsable editable' : 'Contexto · solo lectura'}</span>}
-                      {tarea && estado ? (
-                        <>
-                          <span style={{ ...badge, background: estado.fondo, color: estado.texto }}>{estado.label}</span>
-                          <span style={{ fontSize: 12, fontWeight: 700, color: '#334155' }}>{tarea.pct}%</span>
-                        </>
+                      {tarea ? (
+                        <span style={{ fontSize: 12, fontWeight: 700, color: '#334155' }}>{tarea.pct}%</span>
                       ) : <span style={{ ...badge, background: '#f1f5f9', color: '#64748b' }}>Sin seguimiento</span>}
                       {editable(act) && <button type="button" style={accion} onClick={() => { if (editable(act)) setAbierta(act.id!); }} aria-label={`Actualizar avance de ${act.label}`}>Actualizar avance</button>}
                       {puedeCrear && <button type="button" onClick={() => agregarEtapa(ent.id, act.id!)} style={accion}><Plus size={12}/> Agregar etapa</button>}
@@ -337,6 +404,8 @@ export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, per
                               onChange={ev => { if (editable(et)) cambiarActividad(ent.id, act.id!, a => ({ ...a, etapas: (a.etapas ?? []).map(e => e.id === et.id ? { ...e, label: ev.target.value } : e) })); }}/>}
                             {responsable(et, `de la etapa ${ei + 1}.${ai + 1}.${eti + 1}`, id =>
                               cambiarActividad(ent.id, act.id!, a => ({ ...a, etapas: (a.etapas ?? []).map(e => e.id === et.id ? { ...e, responsableId: id } : e) })))}
+                            {selectorEstado(et, et.estado ?? 'backlog', `de la etapa ${ei + 1}.${ai + 1}.${eti + 1}`, estado =>
+                              cambiarActividad(ent.id, act.id!, a => ({ ...a, etapas: (a.etapas ?? []).map(e => e.id === et.id ? { ...e, estado } : e) })))}
                             {!editable(et) ? <span style={{ fontSize: 12, color: '#64748b' }}>Peso: {et.peso}%</span> : <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11, color: '#64748b' }}>
                               Peso
                               <input aria-label={`Peso de la etapa ${ei + 1}.${ai + 1}.${eti + 1}`} type="number" min={0} max={100} step={1} value={et.peso}
@@ -360,6 +429,39 @@ export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, per
         </section>
       ))}
       </div>
+      {creacion && puedeCrear && <div role="dialog" aria-modal="true" aria-label={`Crear ${creacion.tipo}`}
+        onKeyDown={ev => { if (ev.key === 'Escape') setCreacion(null); }}
+        style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+        <form onSubmit={crearElemento} style={{ width: '100%', maxWidth: 440, maxHeight: '90vh', overflowY: 'auto', boxSizing: 'border-box', padding: 24, borderRadius: 14, background: '#fff', display: 'grid', gap: 14 }}>
+          <h2 style={{ margin: 0, fontSize: 18 }}>Crear {creacion.tipo}</h2>
+          <label>Nombre
+            <input autoFocus aria-label="Nombre del nuevo elemento" required value={creacion.nombre}
+              onChange={ev => setCreacion({ ...creacion, nombre: ev.target.value })} style={{ ...campo, width: '100%', boxSizing: 'border-box', marginTop: 6 }}/>
+          </label>
+          <label>Estado
+            <select aria-label="Estado del nuevo elemento" required value={creacion.estado}
+              onChange={ev => setCreacion({ ...creacion, estado: ev.target.value })} style={{ ...campo, width: '100%', marginTop: 6 }}>
+              <option value="">Selecciona un estado</option>
+              {ESTADOS.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+            </select>
+          </label>
+          <label>Responsable
+            <select aria-label="Responsable del nuevo elemento" required value={creacion.responsableId}
+              onChange={ev => setCreacion({ ...creacion, responsableId: ev.target.value })} style={{ ...campo, width: '100%', marginTop: 6 }}>
+              {(personal ? equipo.filter(u => u.id === usuario.id) : equipo).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+          </label>
+          {creacion.tipo === 'etapa' && <label>Peso (%)
+            <input aria-label="Peso de la nueva etapa" type="number" min={0} max={100} step={1} required value={creacion.peso}
+              onChange={ev => setCreacion({ ...creacion, peso: Number(ev.target.value) })} style={{ ...campo, width: '100%', boxSizing: 'border-box', marginTop: 6 }}/>
+          </label>}
+          {errorCreacion && <p role="alert" style={{ color: '#b91c1c' }}>{errorCreacion}</p>}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button type="button" onClick={() => setCreacion(null)} style={accion}>Cancelar</button>
+            <button type="submit" disabled={!creacion.nombre.trim() || !esEstado(creacion.estado) || !!pendiente} style={accion}>Crear elemento</button>
+          </div>
+        </form>
+      </div>}
       {tareaAbierta && actAbierta && <React.Fragment key={tareaAbierta.id}><PanelAvance plan={planActual} tarea={tareaAbierta}
         equipoPermitido={personal ? equipo.filter(u => u.id === usuario.id) : equipo}
         responsableId={actAbierta.responsableId} onGuardar={guardarAvance} onCerrar={() => setAbierta(null)}/></React.Fragment>}

@@ -184,6 +184,7 @@ export interface KanbanTask {
   entregableId?: string;
   actIdx?: number;
   fromPlan?: boolean;
+  tym?: { tipo: 'entregable' | 'actividad' | 'etapa'; nodoId: string };
   isLocked?: boolean;
   links: KanbanLink[];
   comments: KanbanComment[];

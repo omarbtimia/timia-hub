@@ -8,6 +8,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useAuth, PROJECTS, canAccess, canInProject, effectiveRole, ROLE_LABEL } from '../contexts/AuthContext';
 import { adminStore, makePlanKey, type KanbanTask, type KanbanStatus, type AdminUser, type Priority } from '../lib/adminStore';
 import { sincronizarPlanDesdeTablero } from '../lib/planTablero';
+import { persist } from '../lib/persist';
+import { accesoTym, consultaAmpliadaTym, useCambiosTym } from '../modules/tym/responsables';
+import { CAMBIO_TYM, TIPOS_TYM, disponibilidadTym, guardarDesdeTableroTym, puedeMoverTym, reconciliarProyectoTym } from '../modules/tym/tablero';
 
 // ─── Permisos por rol ─────────────────────────────────────────────────────────
 
@@ -83,12 +86,13 @@ interface DrawerProps {
   task: KanbanTask | null;
   allUsers: AdminUser[];
   role: string;
-  onSave: (t: KanbanTask) => void;
+  onSave: (t: KanbanTask) => boolean;
   onDelete: (id: string) => void;
   onClose: () => void;
+  bloqueado: boolean;
 }
 
-function TaskDrawer({ task, allUsers, role, onSave, onDelete, onClose }: DrawerProps) {
+function TaskDrawer({ task, allUsers, role, onSave, onDelete, onClose, bloqueado }: DrawerProps) {
   const [t, setT] = useState<KanbanTask | null>(task);
   const [userSearch, setUserSearch] = useState('');
   const [newComment, setNewComment] = useState('');
@@ -108,18 +112,21 @@ function TaskDrawer({ task, allUsers, role, onSave, onDelete, onClose }: DrawerP
 
   if (!t) return null;
 
-  const canEdit   = permIn(user, t.projectId, 'canEdit');
+  const canEdit   = !t.tym && permIn(user, t.projectId, 'canEdit');
+  const problemaTym = t.tym ? disponibilidadTym(t) : '';
+  const soloConsultaTym = !!t.tym && (bloqueado || !!problemaTym);
+  const canMove = t.tym ? !bloqueado && !problemaTym && puedeMoverTym(user, t) : canEdit;
   // Adjuntar enlaces va aparte de editar la tarea: un developer documenta su
   // propio trabajo (PR, evidencia, Confluence) sin poder tocar título ni fechas.
-  const canLink   = permIn(user, t.projectId, 'canLink');
-  const canAssign = permIn(user, t.projectId, 'canAssign');
-  const canDelete = permIn(user, t.projectId, 'canDelete');
+  const canLink   = !soloConsultaTym && permIn(user, t.projectId, 'canLink');
+  const canAssign = !t.tym && permIn(user, t.projectId, 'canAssign');
+  const canDelete = !t.tym && permIn(user, t.projectId, 'canDelete');
   void role;
 
   function save(patch: Partial<KanbanTask>) {
+    if (soloConsultaTym) return;
     const updated = { ...t!, ...patch };
-    setT(updated);
-    onSave(updated);
+    if (onSave(updated)) setT(updated);
   }
 
   function toggleAssignee(uid: string) {
@@ -167,7 +174,7 @@ function TaskDrawer({ task, allUsers, role, onSave, onDelete, onClose }: DrawerP
   return (
     <>
       <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.35)', zIndex:998 }}/>
-      <div style={{ position:'fixed', right:0, top:0, height:'100vh', width:440, background:'#fff', boxShadow:'-4px 0 32px rgba(0,0,0,0.15)', zIndex:999, display:'flex', flexDirection:'column', overflow:'hidden', animation:'slideIn .18s ease-out' }}>
+      <div style={{ position:'fixed', right:0, top:0, height:'100vh', width:'min(440px, 100vw)', background:'#fff', boxShadow:'-4px 0 32px rgba(0,0,0,0.15)', zIndex:999, display:'flex', flexDirection:'column', overflow:'hidden', animation:'slideIn .18s ease-out' }}>
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
         {/* Header */}
@@ -179,6 +186,7 @@ function TaskDrawer({ task, allUsers, role, onSave, onDelete, onClose }: DrawerP
                   <div style={{ width:7, height:7, borderRadius:'50%', background:proj.color }}/>
                   <span style={{ fontSize:9, color:proj.color, fontWeight:700, textTransform:'uppercase' }}>{proj.id}</span>
                   {t.fromPlan && <span style={{ fontSize:8, padding:'1px 4px', borderRadius:3, background:'#f1f5f9', color:'#64748b', fontWeight:600 }}>Plan de Trabajo</span>}
+                  {t.tym && <span style={{ fontSize:10, color:'#0f766e' }}>{TIPOS_TYM[t.tym.tipo]} T&M</span>}
                 </div>
               )}
               {canEdit ? (
@@ -196,8 +204,8 @@ function TaskDrawer({ task, allUsers, role, onSave, onDelete, onClose }: DrawerP
 
           {/* Status + Priority */}
           <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-            {canEdit ? (
-              <select value={t.status} onChange={e => save({ status: e.target.value as KanbanStatus })}
+            {canMove ? (
+              <select aria-label="Estado de la tarjeta" value={t.status} onChange={e => save({ status: e.target.value as KanbanStatus })}
                 style={{ fontSize:10, padding:'2px 6px', borderRadius:5, border:'1px solid #e2e8f0', background:'#f8fafc', color:'#374151', fontWeight:600, cursor:'pointer' }}>
                 {COLUMNS.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
               </select>
@@ -219,6 +227,8 @@ function TaskDrawer({ task, allUsers, role, onSave, onDelete, onClose }: DrawerP
 
         {/* Body */}
         <div style={{ flex:1, overflowY:'auto', padding:'14px 18px' }}>
+          {problemaTym && <p role="alert" style={{ fontSize:12, color:'#b91c1c' }}>{problemaTym}</p>}
+          {t.tym && <p style={{ fontSize:12, color:'#64748b' }}>Nombre, jerarquía y responsable se gestionan desde el proyecto abierto. El estado no modifica el avance.</p>}
 
           {/* Descripción */}
           <div style={{ marginBottom:16 }}>
@@ -251,7 +261,7 @@ function TaskDrawer({ task, allUsers, role, onSave, onDelete, onClose }: DrawerP
           <div style={{ marginBottom:16, display:'flex', alignItems:'center', gap:10, padding:'7px 10px', background:'#f8fafc', borderRadius:7, border:'0.5px solid #f1f5f9' }}>
             <ExternalLink size={11} color="#94a3b8" style={{ flexShrink:0 }}/>
             <span style={{ fontSize:10, color:'#64748b', fontWeight:600, flexShrink:0, width:60 }}>Ticket Jira</span>
-            {editJira ? (
+            {editJira && !t.tym ? (
               <input autoFocus value={jiraInput} onChange={e=>setJiraInput(e.target.value)}
                 onKeyDown={e=>{ if(e.key==='Enter')saveJira(); if(e.key==='Escape')setEditJira(false); }}
                 placeholder="FICO-123"
@@ -259,10 +269,10 @@ function TaskDrawer({ task, allUsers, role, onSave, onDelete, onClose }: DrawerP
             ) : t.jiraId ? (
               <a href={`https://jira.globaldevtools.bbva.com/browse/${t.jiraId}`} target="_blank" rel="noreferrer"
                 style={{ fontSize:11, color:'#2563eb', fontWeight:600, textDecoration:'none', flex:1 }}>{t.jiraId}</a>
-            ) : (
+            ) : t.tym ? <span style={{ fontSize:10, color:'#94a3b8' }}>Sin ticket</span> : (
               <button onClick={()=>setEditJira(true)} style={{ fontSize:10, color:'#94a3b8', background:'none', border:'none', cursor:'pointer', padding:0 }}>+ Vincular</button>
             )}
-            {t.jiraId && !editJira && (
+            {t.jiraId && !editJira && !t.tym && (
               <button onClick={()=>{ setEditJira(true); setJiraInput(t.jiraId??''); }}
                 style={{ fontSize:9, color:'#94a3b8', background:'none', border:'none', cursor:'pointer', padding:'1px 5px', borderRadius:4, marginLeft:'auto' }}>editar</button>
             )}
@@ -356,12 +366,13 @@ function TaskDrawer({ task, allUsers, role, onSave, onDelete, onClose }: DrawerP
             <div style={{ display:'flex', gap:6, marginBottom:10 }}>
               <input
                 value={newComment}
+                disabled={!!t.tym && (soloConsultaTym || !permIn(user, t.projectId, 'canComment'))}
                 onChange={e=>setNewComment(e.target.value)}
                 onKeyDown={e=>{ if(e.key==='Enter')submitComment(); }}
                 placeholder="Escribe un comentario..."
                 style={{ flex:1, fontSize:11, padding:'6px 10px', border:'1px solid #e2e8f0', borderRadius:7, outline:'none', background:'#f8fafc' }}
               />
-              <button onClick={submitComment} style={{ padding:'6px 10px', background:'#111', color:'#fff', border:'none', borderRadius:7, cursor:'pointer', display:'flex', alignItems:'center' }}><Send size={11}/></button>
+              <button onClick={submitComment} disabled={!!t.tym && (soloConsultaTym || !permIn(user, t.projectId, 'canComment'))} style={{ padding:'6px 10px', background:'#111', color:'#fff', border:'none', borderRadius:7, cursor:'pointer', display:'flex', alignItems:'center' }}><Send size={11}/></button>
             </div>
             {(t.comments ?? []).length === 0 && <p style={{ margin:0, fontSize:11, color:'#94a3b8' }}>Sin comentarios</p>}
             <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
@@ -406,11 +417,41 @@ interface KanbanBoardProps {
 
 export default function KanbanBoard({ userRole }: KanbanBoardProps) {
   const { user } = useAuth();
+  useCambiosTym();
   const role = user?.role ?? userRole ?? 'developer';
 
   // Cargar tareas y usuarios desde adminStore
   const [tasks, setTasks] = useState<KanbanTask[]>(() => adminStore.getKanbanTasks());
+  const [errorCarga, setErrorCarga] = useState('');
+  const [errorGuardado, setErrorGuardado] = useState('');
+  const [pendienteTym, setPendienteTym] = useState<KanbanTask | null>(null);
   const allUsers = adminStore.getUsers().filter(u => u.active);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    function actualizar(reconciliar: boolean) {
+      const errores: string[] = [];
+      if (reconciliar) {
+        for (const p of adminStore.getProjects().filter(p => accesoTym(user, p.id))) {
+          try { reconciliarProyectoTym(p.id); }
+          catch (error) { errores.push(`${p.name}: ${error instanceof Error ? error.message : 'No se pudo sincronizar T&M.'}`); }
+        }
+        setErrorCarga(errores.join(' '));
+      }
+      setTasks(adminStore.getKanbanTasks());
+    }
+    function programar() { clearTimeout(timer); timer = setTimeout(() => actualizar(true), 0); }
+    function recargar() { clearTimeout(timer); timer = setTimeout(() => actualizar(false), 0); }
+    actualizar(true);
+    window.addEventListener(CAMBIO_TYM, programar);
+    window.addEventListener('storage', programar);
+    const unsubscribe = persist.onChange(recargar);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener(CAMBIO_TYM, programar);
+      window.removeEventListener('storage', programar);
+      unsubscribe();
+    };
+  }, [user]);
 
   // ── Ámbito de proyectos por rol ──────────────────────────────────────────────
   // pm ve todo; el resto, solo sus proyectos asignados
@@ -437,13 +478,20 @@ export default function KanbanBoard({ userRole }: KanbanBoardProps) {
     : tasks.filter(t => t.projectId === projectFilter);
 
   // Paso 2: donde soy developer (en ese proyecto) solo veo mis tareas asignadas
-  const visibleTasks = projectFiltered.filter(t => !isDevIn(t.projectId) || t.assigneeIds.includes(user?.id ?? ''));
+  const visibleTasks = projectFiltered.filter(t => {
+    if (t.tym && (!t.projectId || !accesoTym(user, t.projectId))) return false;
+    if (t.tym && !consultaAmpliadaTym(user, t.projectId!)) return t.assigneeIds.includes(user?.id ?? '');
+    return !isDevIn(t.projectId) || t.assigneeIds.includes(user?.id ?? '');
+  });
 
   // Tareas por columna
   const byColumn = (col: KanbanStatus) => visibleTasks.filter(t => t.status === col);
 
   // Drawer de detalle de tarea
   const [drawer, setDrawer] = useState<KanbanTask | null>(null);
+  useEffect(() => {
+    setDrawer(actual => actual?.tym ? tasks.find(t => t.id === actual.id) ?? null : actual);
+  }, [tasks]);
 
   // Modal nueva tarea
   const [showNew, setShowNew] = useState(false);
@@ -466,6 +514,26 @@ export default function KanbanBoard({ userRole }: KanbanBoardProps) {
   }
 
   function saveTask(t: KanbanTask) {
+    if (t.tym) {
+      if (pendienteTym && t !== pendienteTym) {
+        setErrorGuardado('Reintenta el guardado pendiente antes de realizar otro cambio T&M.'); return false;
+      }
+      try {
+        if (!user) throw new Error('Inicia sesión para actualizar esta tarjeta.');
+        guardarDesdeTableroTym(user, t);
+        const siguientes = adminStore.getKanbanTasks();
+        setTasks(siguientes);
+        setDrawer(siguientes.find(x => x.id === t.id) ?? null);
+        setPendienteTym(null);
+        setErrorGuardado('');
+        return true;
+      } catch (error) {
+        setErrorGuardado(error instanceof Error ? error.message : 'No se pudo guardar la tarjeta T&M.');
+        setPendienteTym(t);
+        setDrawer(adminStore.getKanbanTasks().find(x => x.id === t.id) ?? null);
+        return false;
+      }
+    }
     const idx = tasks.findIndex(x => x.id === t.id);
     const updated = idx >= 0
       ? [...tasks.slice(0,idx), t, ...tasks.slice(idx+1)]
@@ -478,9 +546,13 @@ export default function KanbanBoard({ userRole }: KanbanBoardProps) {
       sincronizarPlanDesdeTablero(makePlanKey(t.projectId, t.cronoId), t.entregableId, t.actIdx, t.assigneeIds);
     }
     setDrawer(updated.find(x => x.id === t.id) ?? null);
+    return true;
   }
 
   function deleteTask(id: string) {
+    if (tasks.find(t => t.id === id)?.tym) {
+      setErrorGuardado('Los elementos T&M se gestionan desde el proyecto abierto.'); return;
+    }
     save(tasks.filter(t => t.id !== id));
   }
 
@@ -506,6 +578,7 @@ export default function KanbanBoard({ userRole }: KanbanBoardProps) {
     const t = tasks.find(x => x.id === draggableId);
     if (!t) return;
     if (!permIn(user, t.projectId, 'canMove')) return;
+    if (t.tym && (!puedeMoverTym(user, t) || pendienteTym)) return;
     saveTask({ ...t, status: destination.droppableId as KanbanStatus });
   };
 
@@ -602,6 +675,10 @@ export default function KanbanBoard({ userRole }: KanbanBoardProps) {
         ))}
       </div>
 
+      {(errorCarga || errorGuardado) && <div role="alert" style={{ color:'#b91c1c', background:'#fef2f2', padding:12, marginBottom:14, borderRadius:8 }}>
+        {errorCarga} {errorGuardado}
+        {pendienteTym && <button type="button" onClick={() => saveTask(pendienteTym)} style={{ marginLeft:8 }}>Reintentar guardado</button>}
+      </div>}
       {/* Kanban columns */}
       <DragDropContext onDragEnd={onDragEnd}>
         <div style={{ display:'flex', gap:14, overflowX:'auto', paddingBottom:16, minHeight:500 }}>
@@ -636,9 +713,11 @@ export default function KanbanBoard({ userRole }: KanbanBoardProps) {
                         {colTasks.map((task, index) => {
                           const proj = PROJECTS.find(p => p.id === task.projectId);
                           const assigned = allUsers.filter(u => task.assigneeIds.includes(u.id));
+                          const problemaTym = task.tym ? disponibilidadTym(task) : '';
                           return (
                             // @ts-ignore
-                            <Draggable key={task.id} draggableId={task.id} index={index}>
+                            <Draggable key={task.id} draggableId={task.id} index={index}
+                              isDragDisabled={!!task.tym && (!!pendienteTym || !puedeMoverTym(user, task) || !!problemaTym)}>
                               {(prov, snap) => (
                                 <div
                                   ref={prov.innerRef}
@@ -659,11 +738,13 @@ export default function KanbanBoard({ userRole }: KanbanBoardProps) {
                                       {task.jiraId && <span style={{ fontSize:8, fontWeight:600, padding:'1px 5px', borderRadius:4, background:'#dbeafe', color:'#1d4ed8' }}>{task.jiraId}</span>}
                                     </div>
                                     {task.fromPlan && <Lock size={10} color="#94a3b8" title="Del Plan de Trabajo"/>}
+                                    {task.tym && <span style={{ fontSize:9, color:'#0f766e' }}>{TIPOS_TYM[task.tym.tipo]} T&M</span>}
                                   </div>
 
                                   {/* Title */}
                                   <h4 style={{ margin:'0 0 4px', fontSize:12, fontWeight:600, color:'#111', lineHeight:1.35 }}>{task.title}</h4>
                                   {task.description && <p style={{ margin:'0 0 8px', fontSize:10, color:'#64748b', lineHeight:1.4, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>{task.description}</p>}
+                                  {problemaTym && <p style={{ fontSize:10, color:'#b91c1c' }}>{problemaTym}</p>}
 
                                   {/* Footer */}
                                   <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', paddingTop:6, borderTop:'1px solid #f1f5f9' }}>
@@ -764,6 +845,7 @@ export default function KanbanBoard({ userRole }: KanbanBoardProps) {
       {/* Task Drawer */}
       <TaskDrawer
         task={drawer}
+        bloqueado={!!pendienteTym}
         allUsers={allUsers}
         role={role}
         onSave={saveTask}

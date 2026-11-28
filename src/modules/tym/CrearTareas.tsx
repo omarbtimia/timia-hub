@@ -5,11 +5,12 @@ import React, { useMemo, useState } from 'react';
 import { Plus, X, GripVertical } from 'lucide-react';
 import { adminStore } from '../../lib/adminStore';
 import { PasosTym, ChipTym } from './PasosTym';
-import { leerPlan, guardarPlan, nuevaTarea } from './almacen';
-import type { PlanTym, TareaTym } from './tipos';
+import { leerEstructura, guardarEstructura, leerPlan, guardarPlan, nuevaTarea } from './almacen';
+import { ESTADOS, esEstado, estadoDe, planVacio, type PlanTym, type TareaTym } from './tipos';
 import { useAuth } from '../../contexts/AuthContext';
 import { canInProject, effectiveRole } from '../../lib/permissions';
 import { accesoTym, developersDelProyecto } from './responsables';
+import { avisarCambioTym, reconciliarProyectoTym } from './tablero';
 
 const SIN_BLOQUE = 'General';
 
@@ -28,12 +29,25 @@ export default function CrearTareas({ projectId, onListo, onAtras }: Props) {
     () => developersDelProyecto(projectId),
     [projectId],
   );
-  const [plan, setPlan] = useState<PlanTym>(() => leerPlan(projectId));
+  const [carga] = useState(() => {
+    try { return { plan: leerPlan(projectId), error: '' }; }
+    catch (error) { return { plan: planVacio(projectId), error: error instanceof Error ? error.message : 'No se pudo leer el seguimiento.' }; }
+  });
+  const [plan, setPlan] = useState<PlanTym>(carga.plan);
+  const [estructura, setEstructura] = useState(() => {
+    try { return { ...leerEstructura(carga.plan), error: '' }; }
+    catch (error) { return { projectId, entregables: [], error: error instanceof Error ? error.message : 'No se pudo leer la estructura.' }; }
+  });
   const [nombre, setNombre] = useState('');
+  const [estado, setEstado] = useState('');
+  const [estadoBloque, setEstadoBloque] = useState('');
   const [responsable, setResponsable] = useState('');
   const [bloque, setBloque] = useState(SIN_BLOQUE);
   const [bloqueNuevo, setBloqueNuevo] = useState('');
   const [errorGuardado, setErrorGuardado] = useState('');
+  const [pendiente, setPendiente] = useState<PlanTym | null>(null);
+  const destino = (bloque === '__nuevo' ? bloqueNuevo.trim() : bloque) || SIN_BLOQUE;
+  const creaBloque = !estructura.entregables.some(e => e.label === destino);
 
   const bloques = useMemo(() => {
     const vistos = new Set<string>([SIN_BLOQUE, ...plan.bloques, ...plan.tareas.map(t => t.bloque || SIN_BLOQUE)]);
@@ -50,9 +64,21 @@ export default function CrearTareas({ projectId, onListo, onAtras }: Props) {
   }, [plan]);
 
   function aplicar(siguiente: PlanTym) {
+    setPendiente(siguiente);
     try {
+      const eliminadas = new Set(plan.tareas.filter(t => !siguiente.tareas.some(n => n.id === t.id)).map(t => t.id));
+      const nuevaEstructura = leerEstructura(siguiente);
+      guardarEstructura(projectId, nuevaEstructura.entregables.map(e => ({
+        ...e,
+        ...(!estructura.entregables.some(anterior => anterior.label === e.label) && esEstado(estadoBloque) ? { estado: estadoBloque } : {}),
+        activities: e.activities.filter(a => !eliminadas.has(a.id!)),
+      })));
       guardarPlan(siguiente);
+      reconciliarProyectoTym(projectId);
       setPlan(siguiente);
+      setEstructura({ ...leerEstructura(siguiente), error: '' });
+      setPendiente(null);
+      avisarCambioTym();
       setErrorGuardado('');
       return true;
     } catch (error) {
@@ -62,22 +88,26 @@ export default function CrearTareas({ projectId, onListo, onAtras }: Props) {
   }
 
   function agregar() {
+    if (pendiente) return;
     if (!autorizado || (responsable && !equipo.some(u => u.name === responsable))) return;
     const texto = nombre.trim();
-    if (!texto) return;
-    const destino = (bloque === '__nuevo' ? bloqueNuevo.trim() : bloque) || SIN_BLOQUE;
-    const t = nuevaTarea(texto, destino, responsable || undefined);
+    if (!texto || !esEstado(estado) || (creaBloque && !esEstado(estadoBloque))) {
+      setErrorGuardado('Completa el nombre y selecciona el estado de la tarea y del nuevo bloque.'); return;
+    }
+    const t = nuevaTarea(texto, destino, responsable || undefined, estado);
     if (!aplicar({
       ...plan,
       bloques: plan.bloques.includes(destino) ? plan.bloques : [...plan.bloques, destino],
       tareas: [...plan.tareas, t],
     })) return;
     setNombre('');
+    setEstado('');
+    setEstadoBloque('');
     if (bloque === '__nuevo') { setBloque(destino); setBloqueNuevo(''); }
   }
 
   function quitar(id: string) {
-    if (!autorizado) return;
+    if (!autorizado || pendiente) return;
     aplicar({ ...plan, tareas: plan.tareas.filter(t => t.id !== id) });
   }
 
@@ -91,6 +121,8 @@ export default function CrearTareas({ projectId, onListo, onAtras }: Props) {
 
   if (isLoading) return <p role="status">Cargando proyecto…</p>;
   if (!autorizado) return <p role="alert">No tienes acceso a la gestión inicial de tareas de este proyecto. Crea tus elementos desde la vista del proyecto abierto.</p>;
+  if (carga.error) return <p role="alert">No se pudo cargar el proyecto: {carga.error} No se modificaron sus datos.</p>;
+  if (estructura.error) return <p role="alert">No se pudo cargar la estructura: {estructura.error} No se modificaron sus datos.</p>;
 
   return (
     <div style={{ minHeight: '100%', background: '#f8fafc', padding: '40px 24px 56px' }}>
@@ -104,7 +136,11 @@ export default function CrearTareas({ projectId, onListo, onAtras }: Props) {
         <p style={{ margin: '0 0 28px', fontSize: 15, color: '#64748b', maxWidth: '72ch' }}>
           {proyecto?.name ?? projectId}. Agrega las tareas con las que arranca el equipo; después se pueden crear más desde el proyecto.
         </p>
-        {errorGuardado && <p role="alert" style={{ color: '#b91c1c' }}>No se guardaron los cambios: {errorGuardado}</p>}
+        {errorGuardado && <p role="alert" style={{ color: '#b91c1c' }}>No se completó el guardado: {errorGuardado}
+          {pendiente && <button type="button" onClick={() => {
+            if (aplicar(pendiente)) { setNombre(''); setEstado(''); setEstadoBloque(''); }
+          }}>Reintentar guardado</button>}
+        </p>}
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 22, alignItems: 'flex-start' }}>
 
@@ -125,6 +161,12 @@ export default function CrearTareas({ projectId, onListo, onAtras }: Props) {
               {equipo.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
             </select>
 
+            <label htmlFor="tym-estado-nueva" style={etiqueta}>Estado</label>
+            <select id="tym-estado-nueva" required value={estado} onChange={e => setEstado(e.target.value)} style={{ ...campo, marginBottom: 14 }}>
+              <option value="">Selecciona un estado</option>
+              {ESTADOS.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+            </select>
+
             <label htmlFor="tym-bloque" style={etiqueta}>
               Bloque <span style={{ fontWeight: 400, color: '#64748b' }}>· opcional</span>
             </label>
@@ -136,11 +178,19 @@ export default function CrearTareas({ projectId, onListo, onAtras }: Props) {
               <input value={bloqueNuevo} onChange={e => setBloqueNuevo(e.target.value)} placeholder="Nombre del bloque"
                 aria-label="Nombre del bloque nuevo" style={{ ...campo, marginBottom: 8 }}/>
             )}
+            {creaBloque && <label style={{ ...etiqueta, marginTop: 12 }}>
+              Estado del nuevo bloque (entregable)
+              <select aria-label="Estado del nuevo bloque" required value={estadoBloque}
+                onChange={e => setEstadoBloque(e.target.value)} style={{ ...campo, marginTop: 6 }}>
+                <option value="">Selecciona un estado</option>
+                {ESTADOS.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+              </select>
+            </label>}
             <p style={{ margin: '0 0 18px', fontSize: 11.5, lineHeight: 1.5, color: '#64748b' }}>
               Agrupa tareas para leerlas mejor. Sin bloques, todas cuelgan de uno solo.
             </p>
 
-            <button onClick={agregar} disabled={!nombre.trim()} style={{
+            <button onClick={agregar} disabled={!!pendiente || !nombre.trim() || !esEstado(estado) || (creaBloque && !esEstado(estadoBloque))} style={{
               width: '100%', minHeight: 48, border: 0, borderRadius: 12,
               background: nombre.trim() ? '#dc2626' : '#e2e8f0', color: nombre.trim() ? '#fff' : '#94a3b8',
               fontSize: 14, fontWeight: 700, cursor: nombre.trim() ? 'pointer' : 'default',
@@ -176,6 +226,7 @@ export default function CrearTareas({ projectId, onListo, onAtras }: Props) {
                     <GripVertical size={15} color="#cbd5e1" style={{ flex: '0 0 auto' }} aria-hidden="true"/>
                     <span style={{ flex: '999 1 200px', minWidth: 0, fontSize: 13.5 }}>{t.nombre}</span>
                     <span style={{ flex: '0 1 auto', fontSize: 12.5, color: '#64748b' }}>{t.responsable ?? 'Sin asignar'}</span>
+                    <span style={{ fontSize: 12 }}>{estadoDe(t.estado).label}</span>
                     <button onClick={() => quitar(t.id)} aria-label={`Quitar ${t.nombre}`} style={{
                       flex: '0 0 auto', width: 44, height: 44, border: 0, background: 'transparent', cursor: 'pointer',
                       display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -189,7 +240,7 @@ export default function CrearTareas({ projectId, onListo, onAtras }: Props) {
 
             {plan.tareas.length > 0 && (
               <p style={{ margin: 0, padding: '14px 20px', borderTop: '1px solid #f1f5f9', fontSize: 12.5, lineHeight: 1.55, color: '#64748b' }}>
-                Todas arrancan en 0% y estado <em>En curso</em>. El avance se registra después, tarea por tarea.
+                Las nuevas tareas arrancan en 0% con el estado seleccionado. El estado no modifica el porcentaje de avance.
               </p>
             )}
           </section>

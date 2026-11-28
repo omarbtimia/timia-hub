@@ -25,7 +25,7 @@ Desde Dashboard, al entrar a un proyecto abierto se muestran entregables,
 actividades y etapas en dos pestañas:
 
 - **Tareas Activas** (inicial): paneles desplegables para crear y editar la estructura.
-  Conserva todas las actividades, incluidas las finalizadas y las no requeridas.
+  Conserva todas las actividades, incluidas las finalizadas.
 - **Reporte Histórico**: la misma estructura actual, completamente desplegada y
   solo lectura, sin controles de edición ni actualización de avance. Refleja el
   contenido actual, no versiones históricas almacenadas.
@@ -39,6 +39,8 @@ salir, cambiar de proyecto o recargar, sin agregar fechas ni semanas a T&M.
 Los campos adicionales son el `id` opcional de actividad, que conserva el vínculo
 con las tareas existentes al renombrarlas, y `responsableId` opcional
 en cada entregable, actividad y etapa T&M para identificar a su dueño por id.
+Entregables y etapas también guardan su `estado`; el de las actividades reutiliza
+el seguimiento existente, sin duplicarlo en la estructura.
 El campo `resp` de los cronogramas conserva su significado Timia/BBVA/mixto.
 
 Esta estructura es **exclusiva de este navegador**: su backend está pendiente.
@@ -66,7 +68,8 @@ de Gestionar equipo:
   Esta excepción no permite renombrar estructura ajena ni actualizar avances desde
   Panorama General. Reporte Histórico nunca permite editar o reasignar.
 
-Los elementos nuevos se preasignan al developer de la vista actual. Un responsable
+Los elementos nuevos se preasignan al developer de la vista actual y requieren
+seleccionar un estado antes de crearlos; cancelar no guarda nada. Un responsable
 distinto en una etapa no cambia el de su actividad ni concede acceso a su avance.
 Los contadores incluyen los contenedores visibles de contexto. La suma de pesos
 corresponde a todas las etapas de la actividad, aunque el filtro oculte algunas.
@@ -77,18 +80,60 @@ inequívoca a un developer del proyecto; los demás elementos quedan Sin asignar
 `timia_tym_planes`, con su sincronización actual si la API está activa. Las
 actividades nuevas nacen con avance 0% y seguimiento usando el mismo id de la
 estructura. Las actividades locales anteriores **Sin seguimiento** lo inicializan
-al guardar su primer avance, no al consultarlas. Los pesos de etapas no recalculan
+al guardar su primer avance o cambiar su estado, no al consultarlas. Los pesos de etapas no recalculan
 el avance ni se agregan avances independientes para entregables o etapas.
 
 Editar una vista personal conserva los elementos de las otras personas. Si falla
 alguna escritura, se conserva la edición visible y se ofrece **Reintentar guardado**;
 el selector de persona se bloquea mientras hay cambios pendientes. La estructura
-y el seguimiento usan dos claves y no constituyen una transacción atómica.
+y el seguimiento, junto con las tarjetas vinculadas, no constituyen una transacción atómica.
 Estos controles delimitan la experiencia del frontend: el aislamiento real de
 lecturas y escrituras por persona en el servidor continúa pendiente. No se
 modifican permisos de otros módulos ni de proyectos cerrados.
 
 Comprobación enfocada: `npm run verif:tym`.
+
+### Estados y tablero Kanban
+
+Entregables, actividades y etapas usan **Backlog**, **En Progreso**, **Revisión** y
+**Finalizado**, el mismo catálogo del tablero de proyectos cerrados. Cada elemento
+tiene su propio estado: cambiarlo no actualiza padres, hijos ni hermanos. Estado
+y porcentaje son independientes, incluso al crear una actividad en **Finalizado** con
+avance inicial 0%.
+
+Al abrir un proyecto T&M o el tablero se reconcilian sus tarjetas: una por nodo,
+identificadas como **Entregable T&M**, **Actividad T&M** o **Etapa T&M**, con el
+responsable individual y el contexto de la rama. Se reutiliza
+`timia_kanban_tasks`, con un vínculo mínimo `tym: { tipo, nodoId }` y el proyecto
+existente; no se agregan claves, cronogramas ni fechas de entrega ficticias.
+La reconciliación es idempotente y conserva comentarios y enlaces.
+
+Cambiar un estado en **Tareas Activas** actualiza su tarjeta; moverla de columna
+o usar su selector de estado actualiza el elemento del proyecto, también si ambas
+pantallas están montadas. El movimiento requiere `tasks.update_status`, acceso
+al proyecto y capacidad de editar ese trabajo T&M. Un developer solo mueve sus
+propias tarjetas, aunque tenga consulta ampliada. Los nodos sin asignar no son
+trabajo de otro developer. Nombre, jerarquía, responsable y eliminación de
+tarjetas vinculadas se gestionan desde el proyecto, no desde el tablero.
+**Reporte Histórico** permanece de solo lectura y los contadores de estado del
+Dashboard T&M siguen considerando únicamente actividades.
+
+Los registros anteriores se migran conservando IDs, porcentaje e historial:
+**En curso → En Progreso**, **Finalizada → Finalizado**, **En espera / No se
+requiere → Backlog**. Entregables y etapas sin estado comienzan en Backlog, así
+como actividades locales sin seguimiento. La migración no crea movimientos
+ficticios ni deduce un estado a partir del porcentaje. Las antiguas tareas No se
+requiere dejan de excluirse de los cálculos que utilizaban esa exclusión.
+El alta inicial de tareas también exige el estado del bloque cuando crea un
+entregable nuevo; agregar tareas a un bloque existente no modifica su estado.
+
+La jerarquía continúa siendo local a este navegador. La sincronización existente
+de tarjetas con la API no equivale a compartir esa jerarquía entre dispositivos:
+si llega una tarjeta sin su estructura local, se muestra una advertencia y no se
+permite actualizar su origen ni reconstruirlo parcialmente a partir de ella.
+La API y sus controles de autorización no se modifican.
+
+Comprobación de integración: `npm run verif:tym-tablero`.
 
 ## Dashboard T&M
 

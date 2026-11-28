@@ -25,8 +25,8 @@ w.localStorage.setItem('timia_admin_users', JSON.stringify(users));
 w.localStorage.setItem('timia_admin_projects', JSON.stringify(projects));
 w.localStorage.setItem('timia_project_roles', JSON.stringify({ 'pm:B': 'developer', 'admin:A': 'tech_lead' }));
 const plan: PlanTym = { projectId: 'A', bloques: [], tareas: [
-  { id: 'a', nombre: 'Trabajo Ana', bloque: '', responsable: 'ANA', estado: 'en-curso', pct: 25, creada: '2026-01-01' },
-  { id: 'b', nombre: 'Trabajo Bob', bloque: '', responsable: 'BOB', estado: 'en-espera', pct: 80, creada: '2026-01-01' },
+  { id: 'a', nombre: 'Trabajo Ana', bloque: '', responsable: 'ANA', estado: 'in-progress', pct: 25, creada: '2026-01-01' },
+  { id: 'b', nombre: 'Trabajo Bob', bloque: '', responsable: 'BOB', estado: 'backlog', pct: 80, creada: '2026-01-01' },
 ], historial: {
   a: [{ fecha: '2026-01-02T10:00:00Z', de: 0, a: 25, quien: 'ANA' }],
   b: [{ fecha: '2026-11-27T10:00:00Z', de: 20, a: 80, quien: 'BOB' }],
@@ -100,8 +100,8 @@ try {
 
   const own = resumenesDashboardTym(ana)[0];
   assert.deepEqual([own.entregables, own.actividades, own.etapas, own.contenedores, own.sinSeguimiento], [1, 2, 2, 2, 1]);
-  assert.equal(own.estados['en-curso'], 1);
-  assert.equal(own.estados['en-espera'], 0, 'Actividad ajena con etapa propia no filtra su estado');
+  assert.equal(own.estados['in-progress'], 1);
+  assert.equal(own.estados.backlog, 0, 'Actividad ajena con etapa propia no filtra su estado');
   assert.equal(own.ultimoMovimiento, plan.historial.a[0].fecha, 'No filtra ultima fecha ajena');
   const all = resumenesDashboardTym(pm)[0];
   assert.deepEqual([all.entregables, all.actividades, all.etapas, all.contenedores], [3, 3, 2, 0]);

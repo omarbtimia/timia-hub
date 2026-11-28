@@ -9,9 +9,10 @@ import { adminStore } from '../../lib/adminStore';
 import { ChipTym } from './PasosTym';
 import { leerPlan, guardarPlan } from './almacen';
 import DetalleTym from './DetalleTym';
-import type { PlanTym } from './tipos';
+import { planVacio, type PlanTym } from './tipos';
 import { effectiveRole } from '../../lib/permissions';
 import { accesoTym, developersDelProyecto, consultaAmpliadaTym, useCambiosTym } from './responsables';
+import { CAMBIO_TYM, reconciliarProyectoTym } from './tablero';
 
 export default function ProyectoTym({ projectId }: { projectId: string }) {
   const { user, isLoading } = useAuth();
@@ -24,7 +25,38 @@ export default function ProyectoTym({ projectId }: { projectId: string }) {
 function ProyectoTymContenido({ projectId }: { projectId: string }) {
   const { user } = useAuth();
   const proyecto = useMemo(() => adminStore.getProjects().find(p => p.id === projectId), [projectId]);
-  const [plan, setPlan] = useState<PlanTym>(() => leerPlan(projectId));
+  const [carga] = useState(() => {
+    try { return { plan: leerPlan(projectId), error: '' }; }
+    catch (error) { return { plan: planVacio(projectId), error: error instanceof Error ? error.message : 'No se pudo leer el proyecto.' }; }
+  });
+  const [plan, setPlan] = useState<PlanTym>(carga.plan);
+  const [cargado, setCargado] = useState(!carga.error);
+  const [version, setVersion] = useState(0);
+  const [errorSincronizacion, setErrorSincronizacion] = useState(carga.error);
+  function sincronizar() {
+    try {
+      reconciliarProyectoTym(projectId);
+      setPlan(leerPlan(projectId));
+      setCargado(true);
+      setVersion(actual => actual + 1);
+      setErrorSincronizacion('');
+    } catch (error) { setErrorSincronizacion(error instanceof Error ? error.message : 'No se pudo sincronizar el tablero T&M.'); }
+  }
+  useEffect(() => {
+    sincronizar();
+    function actualizar() {
+      try {
+        const siguiente = leerPlan(projectId);
+        setPlan(actual => JSON.stringify(actual) === JSON.stringify(siguiente) ? actual : siguiente);
+      } catch (error) { setErrorSincronizacion(error instanceof Error ? error.message : 'No se pudo leer el seguimiento.'); }
+    }
+    window.addEventListener(CAMBIO_TYM, actualizar);
+    window.addEventListener('storage', actualizar);
+    return () => {
+      window.removeEventListener(CAMBIO_TYM, actualizar);
+      window.removeEventListener('storage', actualizar);
+    };
+  }, [projectId]);
   const personal = effectiveRole(user, projectId) === 'developer';
   const consultaAmpliada = consultaAmpliadaTym(user, projectId);
   const equipo = developersDelProyecto(projectId);
@@ -77,8 +109,13 @@ function ProyectoTymContenido({ projectId }: { projectId: string }) {
           </select>
         </label> : <p style={{ fontSize: 14, fontWeight: 600 }}>Mi trabajo · {user?.name}</p>}
         {!equipo.length && <p role="status">No hay developers activos asociados a este proyecto. Asócialos desde Gestionar equipo.</p>}
-        <DetalleTym plan={plan} onGuardarPlan={aplicar} equipo={equipo} personaId={personaId}
-          personal={personal} usuario={user!} onPendiente={setBloqueado}/>
+        {errorSincronizacion && <p role="alert" style={{ color: '#b91c1c' }}>
+          No se pudo cargar o sincronizar el proyecto: {errorSincronizacion}{' '}
+          <button type="button" onClick={sincronizar}>Reintentar sincronización</button>
+        </p>}
+        {cargado && <React.Fragment key={version}><DetalleTym plan={plan} onGuardarPlan={aplicar} equipo={equipo} personaId={personaId}
+          personal={personal} usuario={user!} onPendiente={setBloqueado} bloqueado={!!errorSincronizacion}/></React.Fragment>
+        }
       </div>
 
     </div>
