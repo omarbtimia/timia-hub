@@ -50,15 +50,21 @@ se sobrescriben automáticamente.
 El alcance depende del **rol efectivo en el proyecto**, incluidas las asignaciones
 de Gestionar equipo:
 
-- **Developer:** ve y edita solo sus elementos. Los contenedores ajenos necesarios
+- **Developer:** por defecto ve y edita solo sus elementos. Los contenedores ajenos necesarios
   para llegar a sus actividades o etapas se muestran como contexto no editable.
   Sus selectores de responsable únicamente permiten elegirse a sí mismo.
-- **Otros roles operativos:** disponen de **Visualizar trabajo de**, con los developers
+- **Consulta ampliada:** quienes tengan `tym.developers.view_all` disponen de **Visualizar trabajo de**, con los developers
   activos asociados al proyecto. Seleccionar una persona permite editar lo suyo y
-  asignar cada nivel a otro developer del mismo proyecto.
+  asignar cada nivel a otro developer del mismo proyecto si su rol operativo es
+  de gestión. Para un developer este permiso solo amplía la consulta: vuelve a
+  **Mi trabajo** para editar, sin edición ni reasignación de trabajo ajeno.
 - **Panorama General** (inicial para otros roles): muestra todas las ramas una sola
   vez, sin edición de estructura o avance. Solo permite asignar los elementos
-  **Sin asignar** desde Tareas Activas; Reporte Histórico nunca permite editar.
+  **Sin asignar** desde Tareas Activas para gestores. El **LT efectivo del proyecto**
+  puede cambiar responsables de los tres niveles, incluso ya asignados, desde
+  cualquier alcance visible de Tareas Activas, incluido Panorama General.
+  Esta excepción no permite renombrar estructura ajena ni actualizar avances desde
+  Panorama General. Reporte Histórico nunca permite editar o reasignar.
 
 Los elementos nuevos se preasignan al developer de la vista actual. Un responsable
 distinto en una etapa no cambia el de su actividad ni concede acceso a su avance.
@@ -83,3 +89,39 @@ lecturas y escrituras por persona en el servidor continúa pendiente. No se
 modifican permisos de otros módulos ni de proyectos cerrados.
 
 Comprobación enfocada: `npm run verif:tym`.
+
+## Dashboard T&M
+
+En **Planeación → Dashboard T&M** (`/dashboard-tym`) se muestran los proyectos
+abiertos activos accesibles al usuario, con tarjetas por proyecto, filtros de
+proyecto y developer, contadores de estructura, actividades por estado y último
+movimiento del seguimiento. No calcula avance esperado, cronograma, desviación,
+riesgo ni semáforos, ni agrega tarjetas de Avance real o Tareas cerradas.
+El dashboard anterior se mantiene sin cambios.
+
+En **Admin → Roles y Permisos → Proyectos T&M** se administran:
+
+- **Ver Dashboard T&M** (`tym.dashboard.view`): acceso a la nueva pantalla. Su entrada
+  solo aparece si además existe al menos un proyecto T&M accesible con ese permiso.
+  No elimina el acceso previo al detalle del proyecto desde otras pantallas.
+- **Ver todos los desarrolladores** (`tym.developers.view_all`): habilita filtros por
+  persona y Panorama General en dashboard y detalle. Sin él solo se ve lo propio.
+
+Developer recibe acceso al dashboard y consulta propia por defecto; PM, LT y gerente
+reciben ambos permisos. Se respeta el rol efectivo de cada proyecto y las matrices
+guardadas, incluidos roles personalizados. El administrador de plataforma no gana
+permisos operativos por su rol global. El gerente conserva todos los permisos,
+según la regla existente de la matriz.
+
+Si un usuario gestiona un proyecto y en otro es developer, el filtro ampliado solo
+se aplica donde tenga permiso; las demás tarjetas siguen en **Mi trabajo**.
+Los contadores del dashboard excluyen ancestros ajenos de contexto, y los estados
+y el último movimiento solo consideran actividades del alcance, no actividades
+ajenas que contienen una etapa propia. Los elementos Sin seguimiento se distinguen
+sin inventar datos. Los fallos de lectura se muestran por proyecto y excluyen ese
+proyecto del total, identificando el resumen como parcial.
+
+Son **permisos de frontend** en esta entrega: se reutiliza el guardado actual de
+la matriz, pero el catálogo de la API y su aplicación en servidor no se modifican.
+La estructura sigue siendo local; consultar, filtrar o navegar no crea registros.
+Comprobación enfocada: `npm run verif:dashboard-tym`.

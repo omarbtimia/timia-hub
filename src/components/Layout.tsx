@@ -19,8 +19,9 @@ import {
   Activity, Factory, Mail, NotebookPen } from 'lucide-react';
 import { TimiaMark, TimiaWordmark } from './TimiaLogo';
 import ParchePermisos from './ParchePermisos';
+import { proyectosDashboardTym, useCambiosTym, type UsuarioTym } from '../modules/tym/responsables';
 
-export type View = 'correos' | 'notas' | 'setup-project' | 'setup-team' | 'setup-tasks' | 'proyecto-tym' | 'dashboard' | 'standards' | 'analytics' | 'audit' | 'bank-status' | 'notifications' | 'roles-permissions' | 'project-templates' | 'admin' | 'circuitos-bbva' | 'bitacora' | 'estimaciones' | 'plan-trabajo' | 'imputaciones' | 'inventario' | 'links' | 'proyectos' | 'activity-report' | 'fabrica';
+export type View = 'dashboard-tym' | 'correos' | 'notas' | 'setup-project' | 'setup-team' | 'setup-tasks' | 'proyecto-tym' | 'dashboard' | 'standards' | 'analytics' | 'audit' | 'bank-status' | 'notifications' | 'roles-permissions' | 'project-templates' | 'admin' | 'circuitos-bbva' | 'bitacora' | 'estimaciones' | 'plan-trabajo' | 'imputaciones' | 'inventario' | 'links' | 'proyectos' | 'activity-report' | 'fabrica';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -40,7 +41,7 @@ interface LayoutProps {
 export interface ItemMenu { view: View; label: string; icon?: React.ReactNode; perm?: string }
 export interface GrupoMenu { label: string; titulo: string; items: ItemMenu[] }
 
-export function menuDe(rol: string): (ItemMenu | GrupoMenu)[] {
+export function menuDe(rol: string, usuario?: UsuarioTym | null): (ItemMenu | GrupoMenu)[] {
   const puede = (p?: string) => !p || canAccess(rol as UserRole, p);
   const grupo = (label: string, titulo: string, items: ItemMenu[]): GrupoMenu | null => {
     const visibles = items.filter(i => puede(i.perm));
@@ -53,6 +54,8 @@ export function menuDe(rol: string): (ItemMenu | GrupoMenu)[] {
     puede('view_analytics') ? { view: 'analytics' as View, label: 'Dashboard' } : null,
 
     grupo('Planeación', 'Cómo va el trabajo', [
+      ...(usuario && proyectosDashboardTym(usuario).length
+        ? [{ view: 'dashboard-tym' as View, label: 'Dashboard T&M', icon: <Activity size={13}/> }] : []),
       { view: 'proyectos',    label: 'Proyectos',       icon: <Activity size={13}/>,      perm: 'view_analytics' },
       // El plan se abre desde Proyectos: se hace clic en el proyecto y lleva a
       // su plan, así que dos enlaces al mismo sitio sobraban. El directo se
@@ -95,13 +98,14 @@ export const esGrupo = (x: ItemMenu | GrupoMenu): x is GrupoMenu => 'items' in x
 
 export default function Layout({ children, currentView, onViewChange, userRole }: LayoutProps) {
   const { user, logout } = useAuth();
+  useCambiosTym();
   const [showUserMenu,      setShowUserMenu]      = useState(false);
   const [showProfile,       setShowProfile]       = useState(false);
   // Un solo desplegable abierto a la vez, identificado por su etiqueta.
   const [abierto, setAbierto] = useState<string | null>(null);
   const navRef = useRef<HTMLElement>(null);
 
-  const menu = menuDe(userRole);
+  const menu = menuDe(userRole, user);
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {

@@ -13,6 +13,7 @@ import RolesPermissions from './components/RolesPermissions';
 import ProjectTemplates from './components/ProjectTemplates';
 import PMDashboard, { ProyectosPage } from './components/PMDashboard';
 import { CrearTareas, ProyectoTym } from './modules/tym';
+import DashboardTym from './modules/tym/DashboardTym';
 import AdminPanel from './components/AdminPanel';
 import CircuitosBBVA from './components/CircuitosBBVA';
 import Bitacora, { TabLinks } from './components/Bitacora';
@@ -166,6 +167,9 @@ function AppInner() {
 
       case 'dashboard':
         return <KanbanBoard userRole={role} setUserRole={() => {}} />;
+
+      case 'dashboard-tym':
+        return <DashboardTym onViewChange={navigate}/>;
 
       case 'bank-status':
         return <BankStatus />;

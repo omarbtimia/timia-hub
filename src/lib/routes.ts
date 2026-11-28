@@ -6,6 +6,7 @@ import type { View } from '../components/Layout';
 const BASE = ((import.meta as any).env?.BASE_URL ?? '/').replace(/\/+$/, '');   // '' en local, '/timia-hub' en Pages
 
 export const VIEW_PATHS: Record<View, string> = {
+  'dashboard-tym': '/dashboard-tym',
   'analytics': '/', 'dashboard': '/tablero', 'plan-trabajo': '/plan', 'estimaciones': '/estimaciones',
   'bitacora': '/tareas', 'imputaciones': '/imputaciones', 'activity-report': '/activity-report',
   'inventario': '/inventario', 'fabrica': '/fabrica', 'links': '/links', 'circuitos-bbva': '/circuitos', 'proyectos': '/proyectos', 'correos': '/correos', 'notas': '/notas',

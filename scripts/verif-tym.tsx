@@ -80,6 +80,7 @@ globalThis.fetch = async (input, init) => {
     }
     return Response.json({ ok: true });
   }
+  if (url.endsWith('/api/state/timia_role_permissions') && init?.method === 'PUT') return Response.json({ ok: true });
   assert.equal(init?.method, 'PUT', `Solicitud inesperada: ${url}`);
   assert.ok(url.endsWith('/api/state/timia_tym_planes'), `Clave inesperada: ${url}`);
   return Response.json({ ok: true });
@@ -93,6 +94,7 @@ const { probeApi, persist, loadStateFromApi, persistRefresh } = await import('..
 const { adminStore } = await import('../src/lib/adminStore');
 const { leerEstructura, guardarEstructura, leerPlan } = await import('../src/modules/tym/almacen');
 const { developersDelProyecto, estructuraConResponsables } = await import('../src/modules/tym/responsables');
+const { currentMatrix, saveMatrix } = await import('../src/lib/permissions');
 const ProyectoTym = (await import('../src/modules/tym/ProyectoTym')).default;
 const CrearTareas = (await import('../src/modules/tym/CrearTareas')).default;
 await probeApi();
@@ -106,7 +108,7 @@ console.error = (...args: unknown[]) => { errors.push(args); previousError(...ar
 const snapshot = () => w.localStorage.getItem('timia_plan_configs');
 const stored = (): EstructuraTym => JSON.parse(snapshot()!).DEMO;
 const tracking = (): PlanTym => JSON.parse(w.localStorage.getItem('timia_tym_planes')!).DEMO;
-const waitWrites = () => new Promise(resolve => setTimeout(resolve, 450));
+const waitWrites = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 450)); });
 const select = (label: string) => {
   const el = container.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`);
   assert.ok(el, `Falta selector ${label}`);
@@ -298,31 +300,31 @@ try {
 
   const expectedLocal = stored();
   const originalClosed = structuredClone(closed);
-  await loadStateFromApi();
+  await act(async () => { await loadStateFromApi(); });
   assert.deepEqual(stored(), expectedLocal);
   assert.deepEqual(adminStore.getPlanConfigs(), { CERRADO: closed });
   assert.equal(adminStore.getPlanConfig('DEMO'), null);
   assert.equal(adminStore.getProjectCronogramas('DEMO').length, 0);
   assert.throws(() => guardarEstructura('CERRADO', []), /cronograma existente/);
-  await persistRefresh('timia_plan_configs');
+  await act(async () => { await persistRefresh('timia_plan_configs'); });
   assert.deepEqual(stored(), expectedLocal);
-  adminStore.savePlanConfig('CERRADO', { ...closed, totalWeeks: 5 });
+  await act(async () => { adminStore.savePlanConfig('CERRADO', { ...closed, totalWeeks: 5 }); });
   await waitWrites();
   assert.deepEqual(Object.keys(JSON.parse(String(requests.find(r => r.method === 'PUT')!.body)).value), ['CERRADO']);
   assert.deepEqual(stored(), expectedLocal);
   assert.equal(adminStore.getPlanConfig('CERRADO')?.totalWeeks, 5);
   const beacons: Blob[] = [];
   Object.defineProperty(w.navigator, 'sendBeacon', { configurable: true, value: (_url: string, body: Blob) => { beacons.push(body); return true; } });
-  adminStore.savePlanConfigs({ CERRADO: closed });
+  await act(async () => { adminStore.savePlanConfigs({ CERRADO: closed }); });
   w.dispatchEvent(new w.Event('beforeunload'));
   assert.equal(beacons.length, 1);
   assert.deepEqual(Object.keys(JSON.parse(await beacons[0].text()).value), ['CERRADO']);
   await waitWrites();
   denyNextWrite = true;
-  adminStore.savePlanConfig('CERRADO', closed);
+  await act(async () => { adminStore.savePlanConfig('CERRADO', closed); });
   await waitWrites();
   assert.deepEqual(stored(), expectedLocal);
-  persist.clearError();
+  await act(async () => { persist.clearError(); });
   assert.deepEqual(closed, originalClosed);
   const realActual = leerPlan('DEMO');
   w.localStorage.setItem('timia_tym_planes', JSON.stringify({ DEMO: {
@@ -429,7 +431,63 @@ try {
   await act(async () => { root.render(<AuthProvider><CrearTareas projectId="DEMO" onListo={() => {}}/></AuthProvider>); });
   const opcionesIniciales = Array.from(container.querySelectorAll<HTMLOptionElement>('#tym-resp option')).map(o => o.value);
   assert.deepEqual(opcionesIniciales, ['', 'Ana', 'Bob']);
+  await render(lt);
+  assert.equal(select('Visualizar trabajo de').value, '');
+  const ultima = stored().entregables[0].activities[0];
+  await change(select('Responsable del entregable 1'), 'ana');
+  await change(select('Responsable de la actividad 1.1'), 'bob');
+  await click('Desplegar actividad 1.1');
+  await change(select('Responsable de la etapa 1.1.1'), 'bob');
+  assert.equal(stored().entregables[0].responsableId, 'ana');
+  assert.equal(stored().entregables[0].activities[0].responsableId, 'bob');
+  assert.equal(stored().entregables[0].activities[0].etapas![0].responsableId, 'bob');
+  assert.equal(stored().entregables[0].activities[0].etapas![1].responsableId, ultima.etapas![1].responsableId, 'Reasignacion no propaga a hermanos');
+  assert.equal(tracking().tareas.find(t => t.id === 'a1')?.responsable, 'Bob');
+  assert.equal(container.querySelectorAll('input').length, 0, 'LT en panorama no edita nombres o pesos');
+  assert.equal(container.querySelector('[aria-label^="Actualizar avance"]'), null);
+  await report();
+  await click('Tareas Activas');
+  await waitWrites();
+
+  await render(ana);
+  const matrix = currentMatrix();
+  const conConsulta = { ...matrix, developer: [...matrix.developer, 'tym.developers.view_all'] };
+  await act(async () => { saveMatrix(conConsulta); });
+  assert.ok(select('Visualizar trabajo de'));
+  await change(select('Visualizar trabajo de'), 'bob');
+  assert.equal(container.querySelectorAll('input').length, 0, 'Developer no edita trabajo ajeno aunque pueda consultarlo');
+  assert.equal(container.querySelector('select[aria-label^="Responsable"]'), null);
+  assert.equal(Array.from(container.querySelectorAll('button')).some(b => b.textContent?.includes('Agregar')), false);
+  await change(select('Visualizar trabajo de'), '__todos');
+  assert.equal(container.querySelectorAll('input, select[aria-label^="Responsable"]').length, 0);
+  await report();
+  await click('Tareas Activas');
+  await change(select('Visualizar trabajo de'), '');
+  assert.ok(input('Nombre del entregable 1'), 'Regresa a Mi trabajo editable');
+  await change(select('Visualizar trabajo de'), 'bob');
+  await act(async () => { saveMatrix(matrix); });
+  assert.equal(container.querySelector('select[aria-label="Visualizar trabajo de"]'), null, 'Revocacion inmediata elimina el filtro');
+  assert.equal(input('Nombre del entregable 1').value, stored().entregables[0].label);
+  await act(async () => { saveMatrix(conConsulta); });
+  assert.equal(select('Visualizar trabajo de').value, '', 'Rehabilitar no recupera seleccion ajena revocada');
+  await waitWrites();
+  const matrixWrite = requests.filter(r => r.url.endsWith('timia_role_permissions') && r.method === 'PUT').at(-1)!;
+  assert.ok(JSON.parse(String(matrixWrite.body)).value.developer.includes('tym.developers.view_all'));
+  assert.ok(JSON.parse(String(matrixWrite.body)).value._catalog.includes('tym.dashboard.view'));
+
+  await render(pm);
+  await change(select('Visualizar trabajo de'), 'bob');
+  await act(async () => { saveMatrix({ ...matrix, pm: matrix.pm.filter(p => p !== 'tym.developers.view_all') }); });
+  assert.equal(container.querySelector('select[aria-label="Visualizar trabajo de"]'), null, 'PM sin permiso solo ve lo propio');
+  assert.equal(container.querySelectorAll('section[aria-label^="Entregable "]').length, 0);
+  await render(lt);
+  await act(async () => { saveMatrix({ ...matrix, tech_lead: matrix.tech_lead.filter(p => p !== 'tym.developers.view_all') }); });
+  assert.equal(container.querySelector('select[aria-label="Visualizar trabajo de"]'), null);
+  assert.equal(container.querySelectorAll('section[aria-label^="Entregable "]').length, 0, 'LT restringido no salta filtro de consulta');
+  await waitWrites();
+  assert.equal(persist.pendingWrites, 0, 'No quedan escrituras pendientes al finalizar');
   assert.equal(errors.length, 0, 'Sin errores React');
+  console.log('OK: LT reasigna tres niveles en panorama, consulta developer sin edición, matriz API y revocacion inmediata');
   console.log('OK: sesiones sin acceso, proyectos inexistentes y usuario sin elementos');
 } finally {
   await act(async () => { root.unmount(); });

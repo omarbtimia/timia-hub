@@ -3,7 +3,7 @@ import { CheckSquare, ChevronDown, ChevronRight, Info, LayoutList, Plus, Setting
 import { guardarEstructura, leerEstructura, nuevoId, nuevaTarea, conAvance } from './almacen';
 import { estadoDe, type PlanTym, type EntregableTym, type ActividadTym, type EstadoTarea } from './tipos';
 import type { AdminUser } from '../../lib/adminStore';
-import { estructuraConResponsables, filtrarEntregables, type UsuarioTym } from './responsables';
+import { estructuraConResponsables, filtrarEntregables, esLiderTym, type UsuarioTym } from './responsables';
 import PanelAvance from './PanelAvance';
 
 const mensajeError = (error: unknown) => error instanceof Error ? error.message : 'No se pudo acceder al almacenamiento de este navegador.';
@@ -62,12 +62,14 @@ export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, per
   const actividades = visibles.flatMap(e => e.activities);
   const etapas = actividades.flatMap(a => a.etapas ?? []);
   const persona = equipo.find(u => u.id === personaId);
+  const lider = esLiderTym(usuario, plan.projectId);
   const editable = (nodo: { responsableId?: string }) =>
-    !soloLectura && !inicial.error && !!persona && nodo.responsableId === personaId;
-  const puedeCrear = !soloLectura && !inicial.error && !!persona;
+    !soloLectura && !inicial.error && !!persona && nodo.responsableId === personaId
+    && (!personal || nodo.responsableId === usuario.id);
+  const puedeCrear = !soloLectura && !inicial.error && !!persona && (!personal || personaId === usuario.id);
   const sinAsignar = (nodo: { responsableId?: string }) => !equipo.some(u => u.id === nodo.responsableId);
   const puedeAsignar = (nodo: { responsableId?: string }) =>
-    !soloLectura && !inicial.error && (editable(nodo) || (!personal && panorama && sinAsignar(nodo)));
+    !soloLectura && !inicial.error && (lider || editable(nodo) || (!personal && panorama && sinAsignar(nodo)));
 
   function aplicar(siguiente: EntregableTym[], seguimiento = planActual): boolean {
     if (inicial.error) return false;
@@ -228,7 +230,10 @@ export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, per
           en este navegador. La integración con el backend está pendiente; no se comparten entre dispositivos.
           {' '}<strong>Guardar avance</strong> de una tarea existente desde Tareas Activas sí conserva sus cambios e historial.
           Los pesos de etapas no modifican el avance real.
-          {panorama && ' Panorama General es de consulta; solo puedes asignar los elementos que figuran Sin asignar.'}
+          {panorama && (lider
+            ? ' Panorama General es de consulta. Como líder técnico puedes cambiar responsables en Tareas Activas.'
+            : personal ? ' Panorama General es de consulta; solo puedes editar tu trabajo desde Mi trabajo.'
+            : ' Panorama General es de consulta; solo puedes asignar los elementos que figuran Sin asignar.')}
           {soloLectura && ' Este reporte refleja la estructura actual, no versiones históricas guardadas.'}
         </p>
       </div>
@@ -280,7 +285,7 @@ export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, per
               style={{ ...campo, fontWeight: 600, color: '#9f1239' }}/>}
             {responsable(ent, `del entregable ${ei + 1}`, id =>
               aplicar(entregables.map(e => e.id === ent.id ? { ...e, responsableId: id } : e)))}
-            {!panorama && !editable(ent) && !soloLectura && <span style={badge}>Contexto · solo lectura</span>}
+            {!panorama && !editable(ent) && !soloLectura && <span style={badge}>{lider ? 'Contexto · solo responsable editable' : 'Contexto · solo lectura'}</span>}
             <span style={badge}>{ent.activities.length} {ent.activities.length === 1 ? 'actividad' : 'actividades'}</span>
             {puedeCrear && <button type="button" onClick={() => agregarActividad(ent.id)} style={accion}><Plus size={13}/> Agregar actividad</button>}
           </div>
@@ -304,7 +309,7 @@ export default function DetalleTym({ plan, onGuardarPlan, equipo, personaId, per
                         onChange={ev => { if (editable(act)) cambiarActividad(ent.id, act.id, a => ({ ...a, label: ev.target.value })); }} style={campo}/>}
                       {responsable(act, `de la actividad ${ei + 1}.${ai + 1}`, id =>
                         cambiarActividad(ent.id, act.id!, a => ({ ...a, responsableId: id })))}
-                      {!panorama && !editable(act) && !soloLectura && <span style={badge}>Contexto · solo lectura</span>}
+                      {!panorama && !editable(act) && !soloLectura && <span style={badge}>{lider ? 'Contexto · solo responsable editable' : 'Contexto · solo lectura'}</span>}
                       {tarea && estado ? (
                         <>
                           <span style={{ ...badge, background: estado.fondo, color: estado.texto }}>{estado.label}</span>

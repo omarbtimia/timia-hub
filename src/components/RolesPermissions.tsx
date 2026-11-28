@@ -114,6 +114,11 @@ export default function RolesPermissions() {
           <Lock size={12} /> Solo quien tenga el permiso roles.manage (gerente de cuenta / PM) puede modificar la matriz. Estás viendo la configuración vigente.
         </div>
       )}
+      <p role="note" style={{ padding: '10px 12px', background: '#f0fdfa', color: '#0f766e', fontSize: 12, borderRadius: 8 }}>
+        Proyectos T&amp;M: estos permisos controlan el dashboard y la consulta de desarrolladores en el frontend.
+        No conceden edición ajena a un developer. El líder técnico puede reasignar responsables en Tareas Activas.
+        El catálogo y la aplicación de estos permisos en el backend están pendientes.
+      </p>
 
       {/* Tarjetas de rol */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 8, marginBottom: 14 }}>
@@ -194,7 +199,7 @@ export default function RolesPermissions() {
                       const on = (matrix[r] ?? []).includes(p.id); const changed = on !== isDefault(r, p.id); const locked = r === 'account_manager' || !canEdit;
                       return (
                         <td key={r} style={{ textAlign: 'center', padding: '4px 8px' }}>
-                          <button onClick={() => toggle(r, p.id)} disabled={locked} title={r === 'account_manager' ? 'El gerente de cuenta siempre tiene todos los permisos' : changed ? 'Modificado respecto al valor por defecto' : ''}
+                          <button onClick={() => toggle(r, p.id)} disabled={locked} aria-label={`${p.label} · ${META[r].name}`} aria-pressed={on} title={r === 'account_manager' ? 'El gerente de cuenta siempre tiene todos los permisos' : changed ? 'Modificado respecto al valor por defecto' : ''}
                             style={{ width: 26, height: 26, borderRadius: 7, border: `1.5px solid ${on ? META[r].color : '#e2e8f0'}`, background: on ? META[r].color : '#fff',
                               cursor: locked ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', opacity: r === 'account_manager' ? .55 : 1,
                               outline: changed ? '2px solid #fbbf24' : 'none', outlineOffset: 1 }}>

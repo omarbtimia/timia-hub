@@ -100,6 +100,7 @@ let failed = false;
   const auth: any = await import('../src/contexts/AuthContext.tsx');
   const PlanDeTrabajo = (await import('../src/components/PlanDeTrabajo.tsx')).default;
   const PMDashboard = (await import('../src/components/PMDashboard.tsx')).default;
+  const DashboardTym = (await import('../src/modules/tym/DashboardTym.tsx')).default;
   const Estimaciones = (await import('../src/components/Estimaciones.tsx')).default;
   const Bitacora = (await import('../src/components/Bitacora.tsx')).default;
   const ActivityReport = (await import('../src/components/ActivityReport.tsx')).default;
@@ -110,7 +111,7 @@ let failed = false;
   for (const acc of auth.MOCK_ACCOUNTS) {
     if (!acc.projectIds.includes('TYM-DEMO')) acc.projectIds.push('TYM-DEMO');
     w.localStorage.setItem('timia_hub_user', JSON.stringify(acc));
-    for (const [name, C, props] of [['Plan', PlanDeTrabajo, {}], ['Estim', Estimaciones, { onViewChange:()=>{}, onBack:()=>{} }], ['Tareas', Bitacora, {}], ['TR', ActivityReport, { user: acc }], ['Dash', PMDashboard, { onViewChange: () => {} }], ['TymProy', ProyectoTym, { projectId: 'TYM-DEMO' }], ['TymTareas', CrearTareas, { projectId: 'TYM-DEMO', onListo: () => {} }]] as any) {
+    for (const [name, C, props] of [['Plan', PlanDeTrabajo, {}], ['Estim', Estimaciones, { onViewChange:()=>{}, onBack:()=>{} }], ['Tareas', Bitacora, {}], ['TR', ActivityReport, { user: acc }], ['Dash', PMDashboard, { onViewChange: () => {} }], ['DashTym', DashboardTym, { onViewChange: () => {} }], ['TymProy', ProyectoTym, { projectId: 'TYM-DEMO' }], ['TymTareas', CrearTareas, { projectId: 'TYM-DEMO', onListo: () => {} }]] as any) {
       const el = w.document.createElement('div'); w.document.body.appendChild(el);
       const root = createRoot(el, { onUncaughtError: (e:any) => errors.push('uncaught: ' + (e?.stack ?? e)), onCaughtError: (e:any) => errors.push('caught: ' + (e?.stack ?? e)) } as any);
       const click = async (label: string) => {
@@ -135,6 +136,7 @@ let failed = false;
         const debe: Record<string, string[]> = {
           Plan: ['Correos', 'Links importantes', 'Alertas y bloqueantes', 'Aprobación del diccionario'],
           Dash: ['Generar standup', 'Bloqueantes · alertas'],
+          DashTym: ['Dashboard T&amp;M', 'Abrir proyecto abierto'],
         };
         for (const t of debe[name] ?? []) {
           if (!el.innerHTML.includes(t)) errors.push(`falta en ${name}: ${t}`);

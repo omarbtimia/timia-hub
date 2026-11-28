@@ -13,6 +13,8 @@ export const PERMISSIONS: PermissionDef[] = [
   { id: 'projects.view_all',   module: 'Proyectos', label: 'Ver todos los proyectos (no solo los asignados)' },
   { id: 'projects.create',     module: 'Proyectos', label: 'Crear proyectos (wizard) y plantillas' },
   { id: 'projects.manage',     module: 'Proyectos', label: 'Administrar proyectos (Panel Admin)' },
+  { id: 'tym.dashboard.view', module: 'Proyectos T&M', label: 'Ver Dashboard T&M' },
+  { id: 'tym.developers.view_all', module: 'Proyectos T&M', label: 'Ver todos los desarrolladores (sin este permiso, solo lo propio)' },
   { id: 'team.manage',         module: 'Equipo',    label: 'Gestionar usuarios y su asignación a proyectos' },
   { id: 'roles.manage',        module: 'Equipo',    label: 'Editar la matriz de roles y permisos' },
   { id: 'config.manage',       module: 'Equipo',    label: 'Configurar ANS, festivos y parámetros' },
@@ -68,6 +70,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, string[]> = {
   pm: ALL_PERMISSIONS.filter(p => p !== 'projects.view_all'),
   // Líder / Referente técnico: apoya al PM
   tech_lead: [
+    'tym.dashboard.view', 'tym.developers.view_all',
     'plan.view', 'plan.edit_progress', 'plan.manage_issues', 'plan.export',
     'estimaciones.view', 'estimaciones.edit',
     'tasks.view', 'tasks.manage', 'tasks.update_status', 'tasks.assign', 'tasks.comment', 'tasks.link',
@@ -81,6 +84,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, string[]> = {
   ],
   // Desarrollador: ve lo suyo, mueve sus tareas, reporta bloqueantes, carga su TR
   developer: [
+    'tym.dashboard.view',
     'plan.manage_issues',
     'tasks.view', 'tasks.update_status', 'tasks.comment', 'tasks.link',
     'bitacora.view', 'bitacora.write', 'circuitos.view',
@@ -296,4 +300,5 @@ export function hasPermission(role: string | undefined, permission: string): boo
  *  el administrador y cuáles aparecieron después (esos siguen el default). */
 export function saveMatrix(matrix: Record<string, string[]>): void {
   persistSet(KEY, { ...matrix, _catalog: ALL_PERMISSIONS });   // localStorage + API
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('timia-permissions-change'));
 }

@@ -1,6 +1,8 @@
 import { adminStore, type AdminUser } from '../../lib/adminStore';
 import { effectiveRole, canInProject } from '../../lib/permissions';
 import type { ActividadTym, EntregableTym, PlanTym } from './tipos';
+import { useEffect, useReducer } from 'react';
+import { persist } from '../../lib/persist';
 
 export type UsuarioTym = Pick<AdminUser, 'id' | 'name' | 'role' | 'projectIds'>;
 
@@ -13,6 +15,33 @@ export function accesoTym(user: UsuarioTym | null, projectId: string): boolean {
   const proyecto = adminStore.getProjects().find(p => p.id === projectId);
   return !!user && !!proyecto?.active && proyecto.tipo === 'tym'
     && (user.projectIds.includes(projectId) || canInProject(user, 'projects.view_all', projectId));
+}
+
+export function proyectosDashboardTym(user: UsuarioTym | null) {
+  return adminStore.getProjects().filter(p =>
+    accesoTym(user, p.id) && canInProject(user, 'tym.dashboard.view', p.id));
+}
+
+export function consultaAmpliadaTym(user: UsuarioTym | null, projectId: string): boolean {
+  return accesoTym(user, projectId) && canInProject(user, 'tym.developers.view_all', projectId);
+}
+
+export function esLiderTym(user: UsuarioTym | null, projectId: string): boolean {
+  return accesoTym(user, projectId) && effectiveRole(user, projectId) === 'tech_lead';
+}
+
+export function useCambiosTym() {
+  const [, actualizar] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    window.addEventListener('storage', actualizar);
+    window.addEventListener('timia-permissions-change', actualizar);
+    const unsubscribe = persist.onChange(actualizar);
+    return () => {
+      window.removeEventListener('storage', actualizar);
+      window.removeEventListener('timia-permissions-change', actualizar);
+      unsubscribe();
+    };
+  }, []);
 }
 
 export function responsableActividad(actividad: ActividadTym, plan: PlanTym, equipo: AdminUser[]): string | undefined {
